@@ -1,7 +1,16 @@
-from PySide6.QtCore import Signal, QObject, Slot
+# src/util/network/request.py
+"""网络请求 - 纯 Python 实现
 
+T2.10 改造:
+- 移除 GUI 框架依赖
+- NetworkRequestWorker 继承 WorkerBase,事件由基类提供
+- 移除原事件装饰器
+- config 调用改为字符串键形式(本模块内 18 处)
+- 保留 httpx 请求逻辑
+"""
 from ..common._json import json_loads
 from ..common.config import config
+from ..thread.worker_base import WorkerBase
 
 from threading import Lock
 from enum import Enum
@@ -15,6 +24,7 @@ logger = logging.getLogger(__name__)
 _client = None
 _client_lock = Lock()
 
+
 def get_mounts(proxies = None):
     if proxies:
         proxy_url = proxies.get("http") or proxies.get("https")
@@ -26,14 +36,16 @@ def get_mounts(proxies = None):
     else:
         return None
 
+
 def _create_client():
     from .proxy import Proxy
-    
+
     limits = httpx.Limits(max_connections = 10, max_keepalive_connections = 10)
     transport = httpx.HTTPTransport(retries = 3)
 
-    if config.get(config.proxy_enabled):
-        logger.info("已启用代理，类型：%s，服务器：%s:%s", config.get(config.proxy_type), config.get(config.proxy_server), config.get(config.proxy_port))
+    if config.get("proxy_enabled"):
+        logger.info("已启用代理，类型：%s，服务器：%s:%s",
+                    config.get("proxy_type"), config.get("proxy_server"), config.get("proxy_port"))
 
     return httpx.Client(
         limits = limits,
@@ -84,10 +96,12 @@ class _LazyClientProxy:
 
 client = _LazyClientProxy()
 
+
 class RequestType(Enum):
     GET = 0
     POST = 1
     HEAD = 2
+
 
 class ResponseType(Enum):
     TEXT = 0
@@ -95,10 +109,15 @@ class ResponseType(Enum):
     BYTES = 2
     HEADERS = 3
     REDIRECT_URL = 4
-    RESPONSE = 5         # 返回完整的 Response 对象，供需要访问更多信息的情况使用
+    RESPONSE = 5  # 返回完整的 Response 对象,供需要访问更多信息的情况使用
+
 
 class SyncNetWorkRequest:
-    def __init__(self, url: str, request_type: RequestType = RequestType.GET, params: dict = None, response_type: ResponseType = ResponseType.JSON, raise_for_status: bool = True, json_data: dict = None, data: dict = None, content_type: str = None):
+    """同步网络请求封装(基于 httpx)"""
+
+    def __init__(self, url: str, request_type: RequestType = RequestType.GET, params: dict = None,
+                 response_type: ResponseType = ResponseType.JSON, raise_for_status: bool = True,
+                 json_data: dict = None, data: dict = None, content_type: str = None):
         self.url = url
         self.params = params
         self.request_type = request_type
@@ -106,7 +125,7 @@ class SyncNetWorkRequest:
         self.raise_for_status = raise_for_status
         self.json_data = json_data
         self.data = data
-        self.content_type = content_type     # 供 POST 请求使用，自动设置 Content-Type 头部
+        self.content_type = content_type  # 供 POST 请求使用,自动设置 Content-Type 头部
 
         self.proxies = None
 
@@ -153,15 +172,15 @@ class SyncNetWorkRequest:
 
             case ResponseType.REDIRECT_URL:
                 return str(response.url)
-            
+
             case ResponseType.RESPONSE:
                 return response
-    
+
     def update_headers(self):
         get_client().headers.update(
             {
                 "Referer": "https://www.bilibili.com/",
-                "User-Agent": config.get(config.user_agent)
+                "User-Agent": config.get("user_agent")
             }
         )
 
@@ -169,23 +188,28 @@ class SyncNetWorkRequest:
             get_client().headers["Content-Type"] = self.content_type
 
         else:
-            # 如果没有指定 content_type，则移除可能存在的 Content-Type 头部，避免影响某些请求
+            # 如果没有指定 content_type,则移除可能存在的 Content-Type 头部,避免影响某些请求
             if "Content-Type" in get_client().headers:
                 get_client().headers.pop("Content-Type", None)
 
-class NetworkRequestWorker(SyncNetWorkRequest, QObject):
-    success = Signal(object)
-    error = Signal(str)
-    finished = Signal()
 
-    def __init__(self, url: str, request_type: RequestType = RequestType.GET, params: dict = None, response_type: ResponseType = ResponseType.JSON, raise_for_status: bool = True, json_data: dict = None, data: dict = None, content_type: str = None):
-        SyncNetWorkRequest.__init__(self, url, request_type, params, response_type, raise_for_status, json_data, data, content_type)
-        QObject.__init__(self)
+class NetworkRequestWorker(SyncNetWorkRequest, WorkerBase):
+    """异步网络请求 Worker
 
-    @Slot()
+    继承 WorkerBase 获得 success/error/finished 三个回调列表,
+    在 run() 中执行同步请求并通过 emit 通知调用方。
+    """
+
+    def __init__(self, url: str, request_type: RequestType = RequestType.GET, params: dict = None,
+                 response_type: ResponseType = ResponseType.JSON, raise_for_status: bool = True,
+                 json_data: dict = None, data: dict = None, content_type: str = None):
+        SyncNetWorkRequest.__init__(self, url, request_type, params, response_type,
+                                     raise_for_status, json_data, data, content_type)
+        WorkerBase.__init__(self)
+
     def run(self):
         try:
-            resp = super().run()
+            resp = SyncNetWorkRequest.run(self)
 
             self.success.emit(resp)
 
@@ -200,27 +224,29 @@ class NetworkRequestWorker(SyncNetWorkRequest, QObject):
     def set_proxies(self, proxies: dict):
         self.proxies = proxies
 
+
 def get_cookies():
     cookies = {
-        "_uuid": config.get(config.uuid),
-        "b_lsid": config.get(config.b_lsid),
-        "b_nut": str(config.get(config.b_nut)),
-        "bili_ticket": config.get(config.bili_ticket),
-        "bili_ticket_expires": str(config.get(config.bili_ticket_expires)),
-        "buvid_fp": config.get(config.buvid_fp),
-        "buvid3": config.get(config.buvid3),
-        "buvid4": config.get(config.buvid4),
+        "_uuid": config.get("uuid"),
+        "b_lsid": config.get("b_lsid"),
+        "b_nut": str(config.get("b_nut")),
+        "bili_ticket": config.get("bili_ticket"),
+        "bili_ticket_expires": str(config.get("bili_ticket_expires")),
+        "buvid_fp": config.get("buvid_fp"),
+        "buvid3": config.get("buvid3"),
+        "buvid4": config.get("buvid4"),
         "CURRENT_FNVAL": "4048",
         "CURRENT_QUALITY": "0"
     }
 
-    if config.get(config.is_login):
-        cookies["bili_jct"] = config.get(config.bili_jct)
-        cookies["DedeUserID"] = config.get(config.DedeUserID)
-        cookies["DedeUserID__ckMd5"] = config.get(config.DedeUserID__ckMd5)
-        cookies["SESSDATA"] = config.get(config.SESSDATA)
+    if config.get("is_login"):
+        cookies["bili_jct"] = config.get("bili_jct")
+        cookies["DedeUserID"] = config.get("DedeUserID")
+        cookies["DedeUserID__ckMd5"] = config.get("DedeUserID__ckMd5")
+        cookies["SESSDATA"] = config.get("SESSDATA")
 
     return cookies
+
 
 def update_cookies():
     cookies = get_cookies()
