@@ -1,53 +1,42 @@
-from PySide6.QtCore import QThread
+# src/util/thread/async_.py
+"""异步任务 - threading 包装,替代 Qt 异步机制
 
-from .worker_base import WorkerBase
+原实现基于 QThread + WorkerBase.moveToThread,通过 Qt 信号槽
+驱动 worker.run()。改造后简化为 threading.Thread 封装,API
+从 AsyncTask.run(worker, on_started, on_finished) 静态方法
+改为 AsyncTask(func, *args, **kwargs) 实例 + start/join/is_alive。
 
-from functools import partial
+旧 API 的 on_started/on_finished 回调与 safe_quit() 已移除,
+调用方应在 func 内自行处理回调(待 Task 2 全量替换)。
+"""
+import threading
+from typing import Callable, Any, Optional
 
-thread_queue: list[tuple[QThread, WorkerBase]] = []
-
-def remove_from_queue(thread: QThread, worker: WorkerBase):
-    try:
-        thread_queue.remove((thread, worker))
-
-    except Exception:
-        pass
-
-    finally:
-        thread.deleteLater()
 
 class AsyncTask:
-    @staticmethod
-    def run(worker: WorkerBase, on_started = None, on_finished = None):
-        thread = QThread()
+    """封装 threading.Thread 的异步任务
 
-        worker.moveToThread(thread)
+    使用 daemon=True 确保主进程退出时子线程不阻塞,
+    与原 QThread.terminate 行为对齐(避免僵尸线程)。
+    """
 
-        thread.started.connect(worker.run)
+    def __init__(self, func: Callable, *args: Any, **kwargs: Any):
+        # daemon=True:主进程退出时自动终止,避免阻塞退出
+        self._thread = threading.Thread(
+            target=func,
+            args=args,
+            kwargs=kwargs,
+            daemon=True,
+        )
 
-        if on_started:
-            thread.started.connect(on_started)
+    def start(self) -> None:
+        """启动子线程"""
+        self._thread.start()
 
-        if on_finished:
-            thread.finished.connect(on_finished)
+    def join(self, timeout: Optional[float] = None) -> None:
+        """等待子线程结束,可指定超时(秒)"""
+        self._thread.join(timeout=timeout)
 
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(partial(remove_from_queue, thread, worker))
-
-        thread_queue.append((thread, worker))
-
-        thread.start()
-    
-    @staticmethod
-    def safe_quit():
-        for thread, worker in list(thread_queue):
-            if thread.isRunning():
-                thread.quit()
-                thread.wait(1000)
-
-                if thread.isRunning():
-                    thread.terminate()
-                    thread.wait(1000)
-
-                remove_from_queue(thread, worker)
+    def is_alive(self) -> bool:
+        """子线程是否仍在运行"""
+        return self._thread.is_alive()

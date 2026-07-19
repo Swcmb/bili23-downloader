@@ -53,3 +53,34 @@ def test_worker_base_has_signals():
     worker.finished.connect(lambda: received.append(1))
     worker.finished.emit()
     assert received == [1]
+
+
+def test_async_task_runs_in_thread():
+    """AsyncTask 在子线程执行任务"""
+    from util.thread.async_ import AsyncTask
+    import threading
+    main_tid = threading.get_ident()
+    executed_in = []
+    def task():
+        executed_in.append(threading.get_ident())
+    a = AsyncTask(task)
+    a.start()
+    a.join(timeout=5)
+    assert executed_in and executed_in[0] != main_tid
+
+
+def test_async_task_is_alive():
+    """AsyncTask.is_alive 反映线程状态"""
+    from util.thread.async_ import AsyncTask
+    import threading
+    import time
+    started = threading.Event()
+    def task():
+        started.set()
+        time.sleep(0.2)
+    a = AsyncTask(task)
+    a.start()
+    assert started.wait(timeout=2)
+    assert a.is_alive() is True
+    a.join(timeout=5)
+    assert a.is_alive() is False
