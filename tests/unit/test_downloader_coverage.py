@@ -521,7 +521,9 @@ class TestDownloaderInit:
 
     def test_init_sets_fields(self, monkeypatch):
         """__init__ 应设置 task_info/token_bucket/chunk_size/locks 等"""
-        monkeypatch.setattr("util.download.downloader.downloader.config",
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        monkeypatch.setitem(Downloader.__init__.__globals__,
+                            "config",
                             MagicMock(get=lambda k, default=None: 0))
         dl = make_downloader()
 
@@ -541,7 +543,8 @@ class TestDownloaderInit:
             "speed_limit_enabled": True,
             "speed_limit_rate": 2,  # 2 MB/s
         }.get(k, default)
-        monkeypatch.setattr("util.download.downloader.downloader.config", cfg)
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        monkeypatch.setitem(Downloader.__init__.__globals__, "config", cfg)
 
         dl = make_downloader()
         assert dl.token_bucket.rate == 2 * 1024 * 1024
@@ -624,7 +627,8 @@ class TestDownloaderParseCallbacks:
         """on_parse_error 应设置 FAILED 状态"""
         dl = make_downloader()
 
-        with patch("util.download.downloader.downloader.signal_bus"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"signal_bus": MagicMock()}):
             dl.on_parse_error("parse error")
 
         assert dl.task_info.Download.status == DownloadStatus.FAILED
@@ -633,7 +637,8 @@ class TestDownloaderParseCallbacks:
         """on_download_error 应设置 FAILED 且去重(仅触发一次)"""
         dl = make_downloader()
 
-        with patch("util.download.downloader.downloader.signal_bus"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"signal_bus": MagicMock()}):
             dl.on_download_error("error 1")
             dl.on_download_error("error 2")  # 应被忽略
 
@@ -791,7 +796,8 @@ class TestDownloaderOnChunkFinished:
         }
         dl.task_info.Download.queue = ["video"]
 
-        with patch("util.download.downloader.downloader.task_manager"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"task_manager": MagicMock()}):
             dl.on_chunk_finished("video", 0)
 
         file_info = dl.task_info.Download.files["video"]
@@ -810,7 +816,8 @@ class TestDownloaderOnChunkFinished:
         }
         dl.task_info.Download.queue = ["video"]
 
-        with patch("util.download.downloader.downloader.task_manager"), \
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"task_manager": MagicMock()}), \
              patch.object(dl, "start_download") as start_dl:
             dl.on_chunk_finished("video", 0)
 
@@ -829,7 +836,8 @@ class TestDownloaderOnChunkFinished:
         dl.task_info.Download.queue = ["video"]
         dl.task_info.Download.status = DownloadStatus.DOWNLOADING
 
-        with patch("util.download.downloader.downloader.task_manager"), \
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"task_manager": MagicMock()}), \
              patch.object(dl, "on_download_completed") as completed:
             dl.on_chunk_finished("video", 0)
 
@@ -853,7 +861,8 @@ class TestDownloaderUpdateInfo:
             },
         }
 
-        with patch("util.download.downloader.downloader.task_manager"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {"task_manager": MagicMock()}):
             dl.update_info(download_info)
 
         assert "video" in dl.task_info.Download.files
@@ -878,14 +887,19 @@ class TestDownloaderOnDownloadCompleted:
         dl = make_downloader()
         dl.task_info.Download.type = DownloadType.VIDEO | DownloadType.DANMAKU
 
-        with patch("util.download.downloader.downloader.AdditionalParseWorker") as add_cls, \
-             patch("util.download.downloader.downloader.AsyncTask") as async_cls:
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        fake_add_cls = MagicMock()
+        fake_async_cls = MagicMock()
+        with patch.dict(Downloader.__init__.__globals__, {
+            "AdditionalParseWorker": fake_add_cls,
+            "AsyncTask": fake_async_cls,
+        }):
             fake_worker = MagicMock()
-            add_cls.return_value = fake_worker
+            fake_add_cls.return_value = fake_worker
             dl.on_download_completed()
 
         assert dl.task_info.Download.status == DownloadStatus.ADDITIONAL_PROCESSING
-        add_cls.assert_called_once()
+        fake_add_cls.assert_called_once()
 
     def test_on_download_completed_without_additional(self):
         """无附加文件时应直接 wait_merge"""
@@ -917,8 +931,11 @@ class TestDownloaderWaitMerge:
         dl = make_downloader()
         dl.session = MagicMock()
 
-        with patch("util.download.downloader.downloader.task_manager"), \
-             patch("util.download.downloader.downloader.signal_bus"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {
+            "task_manager": MagicMock(),
+            "signal_bus": MagicMock(),
+        }):
             dl.wait_merge()
 
         assert dl.task_info.Download.status == DownloadStatus.FFMPEG_QUEUED
@@ -1003,8 +1020,11 @@ class TestDownloaderTimer:
         dl.task_info.Download.total_size = 1024
         dl.last_sampled_size = 0
 
-        with patch("util.download.downloader.downloader.signal_bus"), \
-             patch("util.download.downloader.downloader.task_manager"):
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {
+            "signal_bus": MagicMock(),
+            "task_manager": MagicMock(),
+        }):
             dl._calculate_speed()
 
         assert dl.task_info.Download.speed == 512
@@ -1019,8 +1039,11 @@ class TestDownloaderTimer:
         dl.task_info.Download.total_size = 100
         dl.last_sampled_size = 100
 
-        with patch("util.download.downloader.downloader.signal_bus"), \
-             patch("util.download.downloader.downloader.task_manager"), \
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        with patch.dict(Downloader.__init__.__globals__, {
+            "signal_bus": MagicMock(),
+            "task_manager": MagicMock(),
+        }), \
              patch.object(dl, "on_download_completed") as completed:
             dl._calculate_speed()
 
@@ -1047,8 +1070,13 @@ class TestDownloaderUpdateItem:
         dl = make_downloader()
         info = make_task_info()
 
-        with patch("util.download.downloader.downloader.signal_bus") as fake_bus, \
-             patch("util.download.downloader.downloader.task_manager") as fake_tm:
+        # 通过 Downloader.__init__.__globals__ 直接 patch,避免 cross-test 污染导致字符串路径 patch 失效
+        fake_bus = MagicMock()
+        fake_tm = MagicMock()
+        with patch.dict(Downloader.__init__.__globals__, {
+            "signal_bus": fake_bus,
+            "task_manager": fake_tm,
+        }):
             dl.update_item(info)
 
         fake_bus.download.update_downloading_item.emit.assert_called_once_with(info)
@@ -1062,8 +1090,10 @@ class TestDownloaderCheckDiskSpace:
         """磁盘空间不足时应抛 OSError"""
         dl = make_downloader()
 
-        with patch("util.download.downloader.downloader.Directory.has_enough_space",
-                   return_value=False, create=True):
+        # 通过 Downloader.__init__.__globals__ 直接 patch Directory 类方法,避免 cross-test 污染失效
+        Directory_cls = Downloader.__init__.__globals__["Directory"]
+        with patch.object(Directory_cls, "has_enough_space",
+                          return_value=False, create=True):
             with pytest.raises(OSError, match="INSUFFICIENT_SPACE"):
                 dl._check_disk_space(tmp_path / "test.mp4", 1024)
 
@@ -1074,14 +1104,17 @@ class TestDownloaderCheckDiskSpace:
             "preallocate_file_space": True,
             "speed_limit_enabled": False,
         }.get(k, default)
-        monkeypatch.setattr("util.download.downloader.downloader.config", cfg)
+        # 通过 Downloader.__init__.__globals__ 直接 patch config/Directory/File,避免 cross-test 污染失效
+        monkeypatch.setitem(Downloader.__init__.__globals__, "config", cfg)
 
         dl = make_downloader()
         file_path = tmp_path / "new.mp4"
 
-        with patch("util.download.downloader.downloader.Directory.has_enough_space",
-                   return_value=True, create=True), \
-             patch("util.download.downloader.downloader.File.preallocate_file") as prealloc:
+        Directory_cls = Downloader.__init__.__globals__["Directory"]
+        File_cls = Downloader.__init__.__globals__["File"]
+        with patch.object(Directory_cls, "has_enough_space",
+                          return_value=True, create=True), \
+             patch.object(File_cls, "preallocate_file") as prealloc:
             dl._check_disk_space(file_path, 1024)
 
         prealloc.assert_called_once()
@@ -1093,14 +1126,17 @@ class TestDownloaderCheckDiskSpace:
             "preallocate_file_space": False,
             "speed_limit_enabled": False,
         }.get(k, default)
-        monkeypatch.setattr("util.download.downloader.downloader.config", cfg)
+        # 通过 Downloader.__init__.__globals__ 直接 patch config/Directory/File,避免 cross-test 污染失效
+        monkeypatch.setitem(Downloader.__init__.__globals__, "config", cfg)
 
         dl = make_downloader()
         file_path = tmp_path / "new.mp4"
 
-        with patch("util.download.downloader.downloader.Directory.has_enough_space",
-                   return_value=True, create=True), \
-             patch("util.download.downloader.downloader.File.create_placeholder") as placeholder:
+        Directory_cls = Downloader.__init__.__globals__["Directory"]
+        File_cls = Downloader.__init__.__globals__["File"]
+        with patch.object(Directory_cls, "has_enough_space",
+                          return_value=True, create=True), \
+             patch.object(File_cls, "create_placeholder") as placeholder:
             dl._check_disk_space(file_path, 1024)
 
         placeholder.assert_called_once()
@@ -1112,15 +1148,18 @@ class TestDownloaderCheckDiskSpace:
             "preallocate_file_space": True,
             "speed_limit_enabled": False,
         }.get(k, default)
-        monkeypatch.setattr("util.download.downloader.downloader.config", cfg)
+        # 通过 Downloader.__init__.__globals__ 直接 patch config/Directory/File,避免 cross-test 污染失效
+        monkeypatch.setitem(Downloader.__init__.__globals__, "config", cfg)
 
         dl = make_downloader()
         file_path = tmp_path / "existing.mp4"
         file_path.touch()
 
-        with patch("util.download.downloader.downloader.Directory.has_enough_space",
-                   return_value=True, create=True), \
-             patch("util.download.downloader.downloader.File.preallocate_file") as prealloc:
+        Directory_cls = Downloader.__init__.__globals__["Directory"]
+        File_cls = Downloader.__init__.__globals__["File"]
+        with patch.object(Directory_cls, "has_enough_space",
+                          return_value=True, create=True), \
+             patch.object(File_cls, "preallocate_file") as prealloc:
             dl._check_disk_space(file_path, 1024)
 
         prealloc.assert_not_called()

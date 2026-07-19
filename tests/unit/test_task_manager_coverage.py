@@ -53,7 +53,13 @@ def make_episode_info(attribute: int = Attribute.VIDEO_BIT,
 
 @pytest.fixture
 def mock_config(monkeypatch):
-    """mock manager 模块的 config,返回可控配置"""
+    """mock manager 模块的 config,返回可控配置
+
+    通过 TaskManager.__init__.__globals__ 直接修改 TaskManager 类所在模块的 config,
+    避免其他测试(如 test_no_pyside6_import)删除并重新加载 manager 模块后,
+    monkeypatch.setattr 通过字符串路径 patch 到新模块,而 TaskManager 类仍引用旧模块
+    导致 patch 不生效。
+    """
     cfg = MagicMock()
     cfg.get.side_effect = lambda key, default=None: {
         "download_path": "/tmp/downloads",
@@ -74,7 +80,8 @@ def mock_config(monkeypatch):
     cfg.global_starting_number = 1
     cfg.current_starting_number = 1
     cfg.target_naming_rule_id = None
-    monkeypatch.setattr("util.download.task.manager.config", cfg)
+    # 关键:用 setitem 修改 TaskManager 类所在模块的 config,而非字符串路径
+    monkeypatch.setitem(TaskManager.__init__.__globals__, "config", cfg)
     return cfg
 
 
@@ -85,8 +92,11 @@ def task_mgr(tmp_path, monkeypatch, mock_config):
     通过 patch directory.data_dir 使 TaskDatabase 在 tmp_path 下创建数据库文件,
     避免污染真实应用数据目录。同时 mock cover_manager 与 FileNameFormatter。
     """
-    from util.common.io.directory import directory
-    monkeypatch.setattr(directory, "data_dir", str(tmp_path))
+    # 获取 TaskManager 实际使用的 TaskDatabase 类,并 patch 其引用的 directory 单例
+    # 避免 cross-test 污染后 directory 单例被替换导致 patch 失效
+    TaskDatabase_cls = TaskManager.__init__.__globals__["TaskDatabase"]
+    directory_instance = TaskDatabase_cls.__init__.__globals__["directory"]
+    monkeypatch.setattr(directory_instance, "data_dir", str(tmp_path))
 
     # mock cover_manager.arrange_cover_id 避免依赖封面数据库
     monkeypatch.setattr(
@@ -95,11 +105,13 @@ def task_mgr(tmp_path, monkeypatch, mock_config):
     )
 
     # mock FileNameFormatter 避免依赖命名规则解析
+    # 通过 TaskManager.__init__.__globals__ 直接 patch,避免 cross-test 污染失效
     fake_formatter = MagicMock()
     fake_formatter.format.return_value = "output/video"
     fake_formatter.get_rule_by_id.return_value = "default_rule"
-    monkeypatch.setattr(
-        "util.download.task.manager.FileNameFormatter",
+    monkeypatch.setitem(
+        TaskManager.__init__.__globals__,
+        "FileNameFormatter",
         lambda: fake_formatter,
     )
 
@@ -211,7 +223,9 @@ def test_check_duplicate_always_ask_skip(task_mgr, mock_config):
         result_info["skip"] = True
         done_event.set()
 
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    fake_bus = MagicMock()
+    # 通过 TaskManager.__init__.__globals__ 直接 patch,避免 cross-test 污染失效
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         fake_bus.download.show_duplicate_download_dialog.emit.side_effect = fake_dialog
         result = task_mgr._check_duplicate(info)
 
@@ -233,7 +247,9 @@ def test_check_duplicate_always_ask_continue(task_mgr, mock_config):
         result_info["skip"] = False
         done_event.set()
 
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    fake_bus = MagicMock()
+    # 通过 TaskManager.__init__.__globals__ 直接 patch,避免 cross-test 污染失效
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         fake_bus.download.show_duplicate_download_dialog.emit.side_effect = fake_dialog
         result = task_mgr._check_duplicate(info)
 
@@ -271,8 +287,10 @@ def test_create_skips_reparse_needed(task_mgr, monkeypatch):
     info = make_episode_info(title="需重新解析")
     info["attribute"] = Attribute.NEED_PARSE_BIT
 
-    # mock GlobalThreadPoolTask.run 避免 reparse worker 实际执行
-    with patch("util.download.task.manager.GlobalThreadPoolTask.run") as pool_run:
+    # 通过 TaskManager.__init__.__globals__ 取真实 GlobalThreadPoolTask 类,
+    # 用 patch.object 直接 patch 类方法,避免字符串路径 patch 失效
+    GlobalThreadPoolTask_cls = TaskManager.__init__.__globals__["GlobalThreadPoolTask"]
+    with patch.object(GlobalThreadPoolTask_cls, "run") as pool_run:
         task_mgr.create([info])
 
     tasks = task_mgr.query()
@@ -313,7 +331,10 @@ def test_create_exception_emits_toast(task_mgr):
 
     task_mgr._TaskManager__episode_info_to_task_info = patched
 
-    with patch("util.download.task.manager.signal_bus"):
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         task_mgr.create([good_info, bad_info])
 
     # 正常任务应被创建
@@ -344,7 +365,10 @@ def test_create_db_exception_emits_toast(task_mgr):
     info = make_episode_info(title="DB异常")
     task_mgr.db_manager.add_tasks = MagicMock(side_effect=RuntimeError("db error"))
 
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         task_mgr.create([info])
 
     # add_to_downloading_list 不应被调用
@@ -460,8 +484,14 @@ def test_cancel_removes_task_and_files(task_mgr):
     task_mgr.create([make_episode_info(title="取消任务")])
     created = task_mgr.query()[0]
 
-    with patch("util.download.task.manager.signal_bus") as fake_bus, \
-         patch("util.download.task.manager.safe_remove") as fake_remove:
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 与 safe_remove 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    fake_remove = MagicMock()
+    with patch.dict(
+        TaskManager.__init__.__globals__,
+        {"signal_bus": fake_bus, "safe_remove": fake_remove},
+    ):
         task_mgr.cancel(created)
 
     assert len(task_mgr.query()) == 0
@@ -519,7 +549,10 @@ def test_recreate_moves_completed_to_downloading(task_mgr):
     assert len(task_mgr.query()) == 0
 
     completed = task_mgr.query(completed=True)[0]
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         task_mgr.recreate(completed)
 
     assert len(task_mgr.query(completed=True)) == 0
@@ -594,7 +627,10 @@ def test_update_media_info_skips_when_default_values(task_mgr):
 # ---------------------------------------------------------------------------
 def test_show_add_to_queue_toast_first_time(task_mgr):
     """_show_add_to_queue_toast 首次调用应 emit toast"""
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         task_mgr._show_add_to_queue_toast()
 
     fake_bus.toast.show.emit.assert_called_once()
@@ -605,7 +641,10 @@ def test_show_add_to_queue_toast_skips_when_already_shown(task_mgr):
     """_show_add_to_queue_toast 在已显示过时应跳过"""
     task_mgr._add_to_queue_toast_shown = True
 
-    with patch("util.download.task.manager.signal_bus") as fake_bus:
+    # 通过 patch.dict 直接修改 TaskManager 类所在模块的 signal_bus 引用,
+    # 避免字符串路径 patch 在 cross-test 污染后失效
+    fake_bus = MagicMock()
+    with patch.dict(TaskManager.__init__.__globals__, {"signal_bus": fake_bus}):
         task_mgr._show_add_to_queue_toast()
 
     fake_bus.toast.show.emit.assert_not_called()
@@ -729,7 +768,10 @@ def test_check_reparse_needed_true(task_mgr):
     info = make_episode_info()
     info["attribute"] = Attribute.NEED_PARSE_BIT
 
-    with patch("util.download.task.manager.GlobalThreadPoolTask.run") as pool_run:
+    # 通过 TaskManager.__init__.__globals__ 取真实 GlobalThreadPoolTask 类,
+    # 用 patch.object 直接 patch 类方法,避免字符串路径 patch 失效
+    GlobalThreadPoolTask_cls = TaskManager.__init__.__globals__["GlobalThreadPoolTask"]
+    with patch.object(GlobalThreadPoolTask_cls, "run") as pool_run:
         result = task_mgr._TaskManager__check_reparse_needed(info, show_toast=True)
 
     assert result is True
@@ -752,7 +794,10 @@ def test_create_async_submits_to_thread_pool(task_mgr):
     """_create_async 应将 create 提交到全局线程池"""
     info = make_episode_info(title="异步创建")
 
-    with patch("util.download.task.manager.GlobalThreadPoolTask.run_func") as pool_run:
+    # 通过 TaskManager.__init__.__globals__ 取真实 GlobalThreadPoolTask 类,
+    # 用 patch.object 直接 patch 类方法,避免字符串路径 patch 失效
+    GlobalThreadPoolTask_cls = TaskManager.__init__.__globals__["GlobalThreadPoolTask"]
+    with patch.object(GlobalThreadPoolTask_cls, "run_func") as pool_run:
         task_mgr._create_async([info], show_toast=False)
 
     pool_run.assert_called_once()

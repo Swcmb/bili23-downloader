@@ -65,7 +65,13 @@ def make_runner_mock():
 
 @pytest.fixture
 def mock_config(monkeypatch):
-    """mock merger 模块的 config,返回可配置的 MagicMock"""
+    """mock merger 模块的 config,返回可配置的 MagicMock
+
+    直接通过 Merger.__init__.__globals__ 修改 Merger 类所在模块的 config,
+    避免其他测试(如 test_no_pyside6_import)删除并重新加载 merger 模块后,
+    monkeypatch.setattr 通过字符串路径 patch 到新模块,而 Merger 类仍引用旧模块
+    导致 patch 不生效。
+    """
     cfg = MagicMock()
     cfg.get.side_effect = lambda key, default=None: {
         "m4a_to_mp3": False,
@@ -73,15 +79,18 @@ def mock_config(monkeypatch):
         "cover_type": "jpg",
     }.get(key, default)
     cfg.keep_original_files_type = OriginalFileType.BOTH
-    monkeypatch.setattr("util.download.downloader.merger.config", cfg)
+    monkeypatch.setitem(Merger.__init__.__globals__, "config", cfg)
     return cfg
 
 
 @pytest.fixture
 def mock_task_manager(monkeypatch):
-    """mock merger 模块的 task_manager 单例"""
+    """mock merger 模块的 task_manager 单例
+
+    同 mock_config,直接修改 Merger 类所在模块的 task_manager 名字。
+    """
     tm = MagicMock()
-    monkeypatch.setattr("util.download.downloader.merger.task_manager", tm)
+    monkeypatch.setitem(Merger.__init__.__globals__, "task_manager", tm)
     return tm
 
 
