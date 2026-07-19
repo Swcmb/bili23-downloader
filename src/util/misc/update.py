@@ -1,5 +1,12 @@
-from PySide6.QtCore import QObject
+# src/util/misc/update.py
+"""应用更新检查 - 纯 Python 实现
 
+T2.11 改造:
+- 移除 GUI 框架依赖
+- Updater 继承 object
+- AsyncTask.run() 旧 API 改为新实例 API: AsyncTask(func).start()
+- 保留 NetworkRequestWorker + signal_bus 业务流程
+"""
 from ..network.request import NetworkRequestWorker, RequestType
 from ..common.enum import ToastNotificationCategory
 from ..common.signal_bus import signal_bus
@@ -11,9 +18,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class Updater(QObject):
+
+class Updater(object):
+    """应用更新检查器
+
+    通过 verhub 接口检查最新版本,根据返回结果触发更新对话框或提示。
+    """
+
     def __init__(self, parent = None):
-        super().__init__(parent)
+        # parent 参数保留以兼容原 API,CLI 版无需父对象
+        pass
 
     def check(self, response: dict):
         latest_version = response["latest_version"]
@@ -32,7 +46,7 @@ class Updater(QObject):
 
             if config.get(config.skip_version) == version and not self.manual:
                 return
-            
+
             signal_bus.update.show_dialog.emit(info)
 
             logger.info("检测到新版本：%s，当前版本：%s", version, config.get(config.app_version))
@@ -63,4 +77,4 @@ class Updater(QObject):
         worker.success.connect(self.check)
         worker.error.connect(on_error)
 
-        AsyncTask.run(worker)
+        AsyncTask(worker.run).start()
