@@ -1,10 +1,16 @@
 name: Release
 
-# 触发条件:推送 v* 形式的 tag(如 v3.0.0)
+# 触发条件:推送 v* 形式的 tag(如 v3.0.0),或手动触发
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag(如 v3.0.0)"
+        required: true
+        type: string
 
 # 同一 tag 不重复发布
 concurrency:
@@ -20,6 +26,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -42,11 +50,13 @@ jobs:
           retention-days: 7
 
   # 发布到 PyPI(仅 tag 触发时执行)
+  # 需要 PYPI_API_TOKEN secret(在仓库 Settings → Secrets 中配置)
   publish:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    environment: pypi
 
     steps:
       - name: Download dist artifacts
@@ -55,24 +65,19 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install twine
-        run: |
-          python -m pip install --upgrade pip
-          pip install twine
-
       - name: Publish to PyPI
-        run: twine upload dist/* --username __token__ --password ${{ secrets.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
 
   # 创建 GitHub Release 并附加构建产物
+  # publish 失败不阻塞 release(可先发布 GitHub Release,后续手动修复 PyPI)
   release:
     name: Create GitHub Release
-    needs: publish
+    needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Checkout code
