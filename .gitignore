@@ -22,7 +22,13 @@ uv.toml
 /json
 /bundle
 /.VSCodeCounter
-/bundle
 
 # webui
 /src/webui/
+
+# CLI 构建产物
+/dist/
+/build/
+*.egg-info/
+.coverage
+htmlcov/
