@@ -1,493 +1,156 @@
-from PySide6.QtCore import QStandardPaths
-from PySide6.QtGui import QPixmap
+# src/util/common/config.py
+"""配置系统 - 纯 Python + JSON + platformdirs
 
-from qfluentwidgets import (
-    QConfig, RangeConfigItem, RangeValidator, OptionsValidator, OptionsConfigItem, BoolValidator,
-    ConfigItem, EnumSerializer, Theme, qconfig
-)
+替代 qfluentwidgets.QConfig + ConfigItem。
 
-from .serializer import LanguageSerializer, ScalingSerializer
-from .enum import (
-    Language, WhenClose, DanmakuType, SubtitleType, CoverType, MetadataType, ProxyType, FFmpegSource, NumberingType,
-    Scaling, FileConflictResolution, VideoContainer, AutoSelectMode, Area, DuplicateDownloadResolution
-)
-from ._json import json_loads
+设计要点:
+- 配置目录:platformdirs.user_config_dir("Bili23-Downloader")
+- 配置文件:<config_dir>/config.json
+- 范围校验迁移到 set() 中,失败抛出 ConfigError
+- threading.Lock 保护并发写入,确保线程安全(AC-024-5)
+- 损坏 JSON 自动备份为 .bak 并重置为默认值(AC-024-3)
 
-from pathlib import Path
+注意:原 API `config.get(config.xxx).value` 已废弃,
+新 API 为 `config.get("xxx")`,待 T2.13 全量替换 53 个文件 162 处调用。
+"""
+import json
 import logging
-import sys
+import os
+import threading
+from typing import Any, Dict, Optional
+
+try:
+    from platformdirs import user_config_dir
+except ImportError:
+    # 兜底,避免 platformdirs 未安装时 import 失败
+    def user_config_dir(app: str) -> str:
+        return os.path.expanduser(f"~/.config/{app}")
+
 
 logger = logging.getLogger(__name__)
 
-def isWin11():
-    return sys.platform == "win32" and sys.getwindowsversion().build >= 22000
 
-class DefaultValue:
-    parse_list_column = [
-        {
-            "attr_key": "number",
-            "width": 160,
-            "show": True
-        },
-        {
-            "attr_key": "title",
-            "width": 350,
-            "show": True
-        },
-        {
-            "attr_key": "badge",
-            "width": 90,
-            "show": True
-        },
-        {
-            "attr_key": "duration",
-            "width": 90,
-            "show": True
-        },
-        {
-            "attr_key": "dyn_time",
-            "width": 130,
-            "show": True
-        }
-    ]
+class ConfigError(Exception):
+    """配置错误(范围校验失败、类型不符等)"""
 
-    auto_select_conditions = {
-        "user_uploads": 0,
-        "bangumi": 0,
-        "other": 0
-    }
 
-    video_quality_priority = [
-        127,
-        126,
-        125,
-        120,
-        116,
-        112,
-        100,
-        80,
-        64,
-        32,
-        16
-    ]
+# 范围校验规则:(min, max) 闭区间
+_RANGE_RULES = {
+    "download_threads": (1, 32),
+    "max_concurrent_tasks": (1, 10),
+}
 
-    audio_quality_priority = [
-        30251,
-        30250,
-        30280,
-        30232,
-        30216
-    ]
-    
-    video_codec_priority = [
-        7,
-        12,
-        13
-    ]
 
-    danmaku_style = {
-        "font": {
-            "name": "黑体",
-            "size": 36,
-            "bold": False,
-            "italic": False,
-            "underline": False,
-            "strike": False
-        },
-        "border": {
-            "border": 1.0,
-            "shadow": 0,
-        },
-        "advanced": {
-            "display_area": 60,
-            "opacity": 80,
-            "scroll_duration": 10,
-            "static_duration": 5,
-            "minimum_gap": 100
-        },
-        "resolution": {
-            "width": 1280,
-            "height": 720
-        }
-    }
-    
-    subtitle_language = {
-        "download_specified": False,
-        "specified_language": []
-    }
+# 内置默认值:保留原 DefaultValue 中的关键配置项 + 新增 CLI 专用项
+# download_threads/max_concurrent_tasks 为 CLI 版新增(替代原 download_thread/download_parallel)
+_DEFAULT_VALUES: Dict[str, Any] = {
+    # 下载相关
+    "video_quality_id": 80,
+    "audio_quality_id": 30280,
+    "video_codec": 7,
+    "download_threads": 8,
+    "max_concurrent_tasks": 3,
+    "video_container": "mp4",
+    "retry_count": 5,
+    # 画质优先级(原 DefaultValue.video_quality_priority)
+    "video_quality_priority": [127, 126, 125, 120, 116, 112, 100, 80, 64, 32, 16],
+    "audio_quality_priority": [30251, 30250, 30280, 30232, 30216],
+    "video_codec_priority": [7, 12, 13],
+    # 附加产物
+    "download_danmaku": False,
+    "download_subtitle": False,
+    "download_cover": False,
+    "download_metadata": False,
+    # 高级
+    "user_agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
+    ),
+}
 
-    subtitle_style = {
-        "font": {
-            "name": "黑体",
-            "size": 36,
-            "bold": False,
-            "italic": False,
-            "underline": False,
-            "strike": False
-        },
-        "border": {
-            "border": 1.0,
-            "shadow": 0.0,
-        },
-        "color": {
-            "primary": "&H00FFFFFF",
-            "secondary": "&H000000FF",
-            "border": "H00000000",
-            "shadow": "H00000000"
-        },
-        "margin": {
-            "left": 10,
-            "right": 10,
-            "vertical": 20
-        },
-        "resolution": {
-            "width": 1280,
-            "height": 720
-        },
-        "alignment": 2,
 
-    }
+class Config:
+    """配置类,提供 get/set/save/load/reload API
 
-    naming_rule_list = [
-        {
-            "id": "a024c20c-5826-4e65-a1f5-802e3e2dbe4f",
-            "name": "DEFAULT_FOR_NORMAL",
-            "type": 11,
-            "rule": "{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "2d98a265-e8e1-4b2a-8133-76bbc65c90fe",
-            "name": "DEFAULT_FOR_PART",
-            "type": 12,
-            "rule": "{parent_title}/P{p}-{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "307906bd-86a2-4b6b-bd75-152a8c3e280b",
-            "name": "DEFAULT_FOR_COLLECTION",
-            "type": 13,
-            "rule": "{collection_title}/{section_title}/{parent_title}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "1fe25f91-caf0-437e-b132-c9367261ff8b",
-            "name": "DEFAULT_FOR_INTERACTIVE_VIDEO",
-            "type": 14,
-            "rule": "{parent_title}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "b1d4e8e3-ca17-4b41-87cf-cda45254701e",
-            "name": "DEFAULT_FOR_BANGUMI",
-            "type": 20,
-            "rule": "{season_title}/{episode_title}",
-            "default": True
-        },
-        {
-            "id": "d582ec37-d8c2-44cf-bbd7-b709ea5c2042",
-            "name": "DEFAULT_FOR_CHEESE",
-            "type": 30,
-            "rule": "{series_title}/{episode_title}",
-            "default": True
-        },
-        {
-            "id": "5913e25f-0bf3-4d3c-a608-8416af778a8a",
-            "name": "DEFAULT_FOR_FAVORITE",
-            "type": 40,
-            "rule": "{favorites_owner_id}_{favorites_owner}/{favorites_name}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "8c48ac82-14c5-4d48-9de7-225d9b53513f",
-            "name": "DEFAULT_FOR_SPACE",
-            "type": 50,
-            "rule": "{space_owner_id}_{space_owner}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "307ccc8e-ad2f-4195-94f0-162ee9ff1ac0",
-            "name": "DEFAULT_FOR_HISTORY",
-            "type": 60,
-            "rule": "{parent_title}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "0a72a82b-5684-448e-9db1-a342de933d3e",
-            "name": "DEFAULT_FOR_WATCH_LATER",
-            "type": 70,
-            "rule": "{parent_title}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "4d28285d-65ca-4c5c-bbb3-b3b5b570c52a",
-            "name": "DEFAULT_FOR_WEEKLY",
-            "type": 80,
-            "rule": "{parent_title}/{leaf_title}",
-            "default": True
-        },
-        {
-            "id": "dc77bd15-be21-4847-856e-68bb3035042f",
-            "name": "DEFAULT_FOR_AUDIO",
-            "type": 90,
-            "rule": "{parent_title}/{uploader} - {leaf_title}",
-            "default": True
-        }
-    ]
+    所有 set 操作立即持久化到 JSON 文件,并加锁保证线程安全。
+    """
 
-    # 国内 CDN 服务器列表
-    cn_cdn_server_list = [
-        {
-            "host": "upos-sz-mirror08c.bilivideo.com",
-            "provider": "HUAWEI"
-        },
-        {
-            "host": "upos-sz-mirrorhw.bilivideo.com",
-            "provider": "HUAWEI"
-        },
-        {
-            "host": "upos-sz-mirrorhwb.bilivideo.com",
-            "provider": "HUAWEI"
-        },
-        {
-            "host": "upos-sz-mirrorcos.bilivideo.com",
-            "provider": "TENCENT"
-        },
-        {
-            "host": "upos-sz-mirrorcosb.bilivideo.com",
-            "provider": "TENCENT"
-        },
-        {
-            "host": "upos-sz-mirrorcoso1.bilivideo.com",
-            "provider": "TENCENT"
-        },
-        {
-            "host": "upos-sz-mirrorali.bilivideo.com",
-            "provider": "ALIYUN"
-        },
-        {
-            "host": "upos-sz-mirroralib.bilivideo.com",
-            "provider": "ALIYUN"
-        }
-    ]
-    
-    # 海外 CDN 服务器列表
-    ov_cdn_server_list = [
-        {
-            "host": "upos-hz-mirrorakam.akamaized.net",
-            "provider": "AKAMAI"
-        },
-        {
-            "host": "upos-sz-mirroraliov.bilivideo.com",
-            "provider": "ALIYUN"
-        },
-        {
-            "host": "upos-sz-mirrorcosov.bilivideo.com",
-            "provider": "TENCENT"
-        }
-    ]
+    def __init__(self, config_path: Optional[str] = None):
+        if config_path is None:
+            config_dir = user_config_dir("Bili23-Downloader")
+            os.makedirs(config_dir, exist_ok=True)
+            config_path = os.path.join(config_dir, "config.json")
+        self._path = config_path
+        self._lock = threading.Lock()
+        # 深拷贝默认值,避免单例间共享可变对象
+        self._data: Dict[str, Any] = json.loads(json.dumps(_DEFAULT_VALUES))
+        self.load()
 
-class APPConfig(QConfig):
-    # APP
-    app_name = "Bili23 Downloader"
-    app_version = "2.11.0"
-    app_comparable_version = "2.11.0"
-    app_config_version = 2100
-    config_version = ConfigItem("Application", "config_version", app_config_version)
+    def get(self, key: str, default: Any = None) -> Any:
+        """读取配置项,不存在返回 default"""
+        with self._lock:
+            return self._data.get(key, default)
 
-    # Interface
-    language = OptionsConfigItem("Interface", "language", Language.AUTO, OptionsValidator(Language), LanguageSerializer(), restart = True)
-    display_scaling = OptionsConfigItem("Interface", "display_scaling", Scaling.AUTO, OptionsValidator(Scaling), ScalingSerializer(), restart = True)
-    mica_effect = ConfigItem("Interface", "mica_effect", False, BoolValidator())
+    def set(self, key: str, value: Any) -> None:
+        """设置并立即持久化,带范围校验
 
-    # Behavior
-    parse_list_column = ConfigItem("Behavior", "parse_list_column", DefaultValue.parse_list_column)
-    parse_list_alternate_row_color = ConfigItem("Behavior", "parse_list_alternate_row_color", True, BoolValidator())
+        范围校验失败抛出 ConfigError,不修改内部状态。
+        """
+        # 范围校验(在锁外执行,避免锁内抛异常)
+        if key in _RANGE_RULES:
+            lo, hi = _RANGE_RULES[key]
+            if not isinstance(value, int) or isinstance(value, bool) or not (lo <= value <= hi):
+                raise ConfigError(f"{key} must be int in [{lo}, {hi}], got {value!r}")
+        # set + save 在同一锁内,保证并发 set 的原子性(避免 tmp 文件竞争)
+        with self._lock:
+            self._data[key] = value
+            self._write_under_lock()
 
-    monitor_clipboard = ConfigItem("Behavior", "monitor_clipboard", False, BoolValidator())
-    show_download_confirmation_dialog = ConfigItem("Behavior", "show_download_confirmation_dialog", False, BoolValidator())
-    auto_select_mode = OptionsConfigItem("Behavior", "auto_select_mode_", AutoSelectMode.CONDITIONAL, OptionsValidator(AutoSelectMode), EnumSerializer(AutoSelectMode))
-    auto_select_conditions = ConfigItem("Behavior", "auto_select_conditions", DefaultValue.auto_select_conditions)
-    parse_history = ConfigItem("Behavior", "parse_history", True, BoolValidator())
+    def save(self) -> None:
+        """显式保存到文件(原子写入:先写临时文件再 rename)"""
+        with self._lock:
+            self._write_under_lock()
 
-    downloading_list_sort_by = OptionsConfigItem("Behavior", "downloading_list_sort_by", "created_time", OptionsValidator(["created_time", "show_title", "file_size", "progress"]))
-    downloading_list_sort_ascending = ConfigItem("Behavior", "downloading_list_sort_ascending", True, BoolValidator())
-    completed_list_sort_by = OptionsConfigItem("Behavior", "completed_list_sort_by", "completed_time",OptionsValidator(["completed_time", "show_title", "file_size"]))
-    completed_list_sort_ascending = ConfigItem("Behavior", "completed_list_sort_ascending", True, BoolValidator())
+    def _write_under_lock(self) -> None:
+        """在已持锁的情况下写入文件(原子 rename)"""
+        # 深拷贝避免序列化期间被其他线程修改
+        data = json.loads(json.dumps(self._data))
+        # 临时文件 + rename 实现原子写入;tmp 文件名带线程 ID 避免并发冲突
+        tmp_path = f"{self._path}.tmp.{threading.get_ident()}"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self._path)
 
-    silent_start = ConfigItem("Behavior", "silent_start", False, BoolValidator())
-    stay_on_top = ConfigItem("Behavior", "stay_on_top", False, BoolValidator())
-    when_close_window = OptionsConfigItem("Behavior", "when_close_window", WhenClose.ALWAYS_ASK, OptionsValidator(WhenClose), EnumSerializer(WhenClose))
+    def load(self) -> None:
+        """加载配置文件,损坏时备份并重置为默认值
 
-    show_download_options_dialog = ConfigItem("Behavior", "show_download_options_dialog", True, BoolValidator())
-    show_notification = ConfigItem("Behavior", "show_notification", False, BoolValidator())
-    preallocate_file_space = ConfigItem("Behavior", "preallocate_file_space", True, BoolValidator())
-    duplicate_download_resolution = OptionsConfigItem("Behavior", "duplicate_download_resolution", DuplicateDownloadResolution.ALWAYS_ASK, OptionsValidator(DuplicateDownloadResolution), EnumSerializer(DuplicateDownloadResolution))
-    file_conflict_resolution = OptionsConfigItem("Behavior", "file_conflict_resolution", FileConflictResolution.AUTO_RENAME, OptionsValidator(FileConflictResolution), EnumSerializer(FileConflictResolution))
-
-    # Download
-    download_path = ConfigItem("Download", "download_path", QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation))
-    download_thread = RangeConfigItem("Download", "download_thread", 4, RangeValidator(1, 10))
-    download_parallel = RangeConfigItem("Download", "download_parallel", 1, RangeValidator(1, 10))
-    speed_limit_enabled = ConfigItem("Download", "speed_limit_enabled", False, BoolValidator())
-    speed_limit_rate = ConfigItem("Download", "speed_limit_rate", 10.0)
-
-    video_quality_priority = ConfigItem("Download", "video_quality_priority", DefaultValue.video_quality_priority)
-    audio_quality_priority = ConfigItem("Download", "audio_quality_priority", DefaultValue.audio_quality_priority)
-    video_codec_priority = ConfigItem("Download", "video_codec_priority", DefaultValue.video_codec_priority)
-
-    video_container = OptionsConfigItem("Download", "video_container", VideoContainer.MP4, OptionsValidator(VideoContainer), EnumSerializer(VideoContainer))
-    m4a_to_mp3 = ConfigItem("Download", "m4a_to_mp3", False)
-
-    # Additional
-    download_danmaku = ConfigItem("Additional", "download_danmaku", False, BoolValidator())
-    danmaku_type = OptionsConfigItem("Additional", "danmaku_type", DanmakuType.ASS, OptionsValidator(DanmakuType), EnumSerializer(DanmakuType))
-    danmaku_style = ConfigItem("Additional", "danmaku_style", DefaultValue.danmaku_style)
-
-    download_subtitle = ConfigItem("Additional", "download_subtitle", False, BoolValidator())
-    subtitle_type = OptionsConfigItem("Additional", "subtitle_type", SubtitleType.ASS, OptionsValidator(SubtitleType), EnumSerializer(SubtitleType))
-    subtitle_language = ConfigItem("Additional", "subtitle_language", DefaultValue.subtitle_language)
-    subtitle_style = ConfigItem("Additional", "subtitle_style", DefaultValue.subtitle_style)
-
-    download_cover = ConfigItem("Additional", "download_cover", False, BoolValidator())
-    cover_type = OptionsConfigItem("Additional", "cover_type", CoverType.JPG, OptionsValidator(CoverType), EnumSerializer(CoverType))
-    attach_cover = ConfigItem("Additional", "attach_cover", False, BoolValidator())
-
-    download_metadata = ConfigItem("Additional", "download_metadata", False, BoolValidator())
-    metadata_type = OptionsConfigItem("Additional", "metadata_type", MetadataType.NFO, OptionsValidator(MetadataType), EnumSerializer(MetadataType))
-
-    # File Naming
-    naming_rule_list = ConfigItem("File Naming", "naming_rule_list", DefaultValue.naming_rule_list)
-    numbering_type = OptionsConfigItem("File Naming", "numbering_type", NumberingType.CONTINUOUS, OptionsValidator(NumberingType), EnumSerializer(NumberingType))
-
-    # Advanced
-    prefer_cdn_server_provider = ConfigItem("Advanced", "prefer_cdn_server_provider_", True, BoolValidator())
-    area = OptionsConfigItem("Advanced", "area", Area.CN, OptionsValidator(Area), EnumSerializer(Area))
-    cn_cdn_server_list = ConfigItem("Advanced", "cn_cdn_server_list", DefaultValue.cn_cdn_server_list)
-    ov_cdn_server_list = ConfigItem("Advanced", "ov_cdn_server_list", DefaultValue.ov_cdn_server_list)
-
-    ffmpeg_source = OptionsConfigItem("Advanced", "ffmpeg_source", FFmpegSource.BUNDLED, OptionsValidator(FFmpegSource), EnumSerializer(FFmpegSource), restart = True)
-    custom_ffmpeg_path = ConfigItem("Advanced", "custom_ffmpeg_path", "", restart = True)
-
-    proxy_enabled = ConfigItem("Advanced", "proxy_enabled", False, BoolValidator(), restart = True)
-    proxy_type = OptionsConfigItem("Advanced", "proxy_type", ProxyType.HTTP, OptionsValidator(ProxyType), EnumSerializer(ProxyType))
-    proxy_server = ConfigItem("Advanced", "proxy_server", "")
-    proxy_port = ConfigItem("Advanced", "proxy_port", 80)
-    proxy_uname = ConfigItem("Advanced", "proxy_uname", "")
-    proxy_password = ConfigItem("Advanced", "proxy_password", "")
-
-    user_agent = ConfigItem("Advanced", "user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
-
-    # Update
-    include_prerelease = ConfigItem("Update", "include_prerelease", False, BoolValidator())
-
-    # Cookie
-    img_key = ConfigItem("Cookie", "img_key", "")
-    sub_key = ConfigItem("Cookie", "sub_key", "")
-
-    bili_jct = ConfigItem("Cookie", "bili_jct", "")
-    DedeUserID = ConfigItem("Cookie", "DedeUserID", "")
-    DedeUserID__ckMd5 = ConfigItem("Cookie", "DedeUserID__ckMd5", "")
-    SESSDATA = ConfigItem("Cookie", "SESSDATA", "")
-
-    uuid = ConfigItem("Cookie", "uuid", "")
-    b_lsid = ConfigItem("Cookie", "b_lsid", "")
-    b_nut = ConfigItem("Cookie", "b_nut", "")
-    bili_ticket = ConfigItem("Cookie", "bili_ticket", "")
-    bili_ticket_expires = ConfigItem("Cookie", "bili_ticket_expires", 0)
-    buvid_fp = ConfigItem("Cookie", "buvid_fp", "")
-    buvid3 = ConfigItem("Cookie", "buvid3", "")
-    buvid4 = ConfigItem("Cookie", "buvid4", "")
-    buvid_expires = ConfigItem("Cookie", "buvid_expires", 0)
-
-    is_login = ConfigItem("Cookie", "is_login", False, BoolValidator())
-    is_expired = False
-
-    # Application
-    accepted_terms = ConfigItem("Application", "accepted_terms", False, BoolValidator())
-    skip_version = ConfigItem("Application", "skip_version", "")
-
-    # User
-    user_uname: str = ""
-    user_uid: str = ""
-    user_avatar_pixmap: QPixmap = None
-
-    # FFmpeg
-    ffmpeg_executable = ""
-    bundle_ffmpeg_exist = False
-
-    no_ffmpeg_available = True
-
-    # Download Options
-    video_quality_id = 200
-    audio_quality_id = 30300
-    video_codec_id = 20
-
-    download_video_stream = True
-    download_audio_stream = True
-    merge_video_audio = True
-    keep_original_files = False
-    keep_original_files_type = 0
-
-    # Misc
-    target_naming_rule_id = None
-    global_starting_number = 1
-    current_starting_number = None
-    
-    main_window_ready = False
-
-    show_auto_parse_dialog = ConfigItem("Misc", "show_auto_parse_dialog", False, BoolValidator())
-    auto_add_to_download_list = ConfigItem("Misc", "auto_add_to_download_list", False, BoolValidator())
-    auto_parse_interval = ConfigItem("Misc", "auto_parse_interval", 2.0)
-
-    auto_parse_teaching_tip_shown = ConfigItem("Misc", "auto_parse_teaching_tip_shown_", False, BoolValidator())
-
-    tutorial_dialog_shown = ConfigItem("Misc", "tutorial_dialog_shown", False, BoolValidator())
-    select_area_dialog_shown = ConfigItem("Misc", "select_area_dialog_shown", False, BoolValidator())
-
-def check_need_patch():
-    # 检查是否需要修补配置文件
-    if config_path.exists():
-        with open(config_path, "r", encoding = "utf-8") as f:
+        损坏判定:JSON 解析失败或根节点非 dict。
+        """
+        if not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise ValueError("config root must be object")
+        except (json.JSONDecodeError, ValueError, OSError) as e:
+            # 备份损坏的文件,便于用户排查
+            bak = self._path + ".bak"
             try:
-                data = json_loads(f.read())
+                os.replace(self._path, bak)
+                logger.warning("配置文件损坏,已备份到 %s,重置为默认值: %s", bak, e)
+            except OSError as backup_err:
+                logger.error("备份损坏配置文件失败: %s", backup_err)
+            return
+        with self._lock:
+            self._data.update(loaded)
 
-            except Exception as e:
-                data = {}
-                
-                logger.error(f"读取配置文件时发生错误：{e}")
+    def reload(self) -> None:
+        """重置为默认值后重新加载文件(用于测试)"""
+        with self._lock:
+            self._data = json.loads(json.dumps(_DEFAULT_VALUES))
+        self.load()
 
-            if "config_version" in data.get("Application", {}):
-                config_version = data.get("Application", {}).get("config_version", 0)
 
-                return config_version < config.app_config_version, config_version
-            else:
-                return True, 0
-    else:
-        return False, 0
-
-def patch_config(config_version: int):
-    # 配置文件修补
-    
-    # 完成修补，写入新的 config_version
-    config.set(config.config_version, config.app_config_version)
-    config.save()
-
-config = APPConfig()
-config.themeMode.value = Theme.AUTO
-
-appdata_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-config_path = Path(appdata_path) / "Bili23 Downloader" / "config.json"
-
-if not config_path.exists():
-    logger.warning("配置文件不存在，将创建新配置文件")
-
-qconfig.load(config_path, config)
-
-# 判断是否需要修补配置文件
-need_patch, config_version = check_need_patch()
-
-if need_patch:
-    logger.info("检测到旧版本配置文件，正在进行修补")
-
-    patch_config(config_version)
+# 模块级单例,保持与原代码 `from util.common.config import config` 兼容
+config = Config()
