@@ -2,12 +2,13 @@ from ...common._json import json_loads, json_dumps
 from ...common.io.directory import directory
 from ...common.timestamp import get_timestamp
 from ...common.database import Database
+from ...common.enum import DownloadStatus
 from ...parse.episode.tree import Attribute
 
 from .info import TaskInfo
 
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 import hashlib
 import logging
 import sqlite3
@@ -280,3 +281,96 @@ class TaskDatabase(Database):
             }
 
         return hashlib.md5(json_dumps(metadata).encode("utf-8")).hexdigest()
+
+    # ---- 历史记录查询/清除 API(供 cli.commands.history 使用) ----
+
+    def get_history(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """合并查询下载任务与已完成任务,按时间倒序分页返回
+
+        :param limit:  返回条数上限
+        :param offset:  偏移量(分页)
+        :return: dict 列表,每项含 time/title/url/status/file_size 五个字段
+        """
+        sql = """
+            SELECT time, title, data FROM (
+                SELECT created_time AS time, title, data FROM download_task
+                UNION ALL
+                SELECT completed_time AS time, title, data FROM completed_task
+            ) ORDER BY time DESC LIMIT ? OFFSET ?
+        """
+        rows = self.query(sql, (limit, offset))
+        return [self._row_to_history_dict(row) for row in rows]
+
+    def _row_to_history_dict(self, row: tuple) -> Dict[str, Any]:
+        """将数据库行(time, title, data_json)解析为 history dict"""
+        time_val, title, data_json = row
+
+        # data 字段为 JSON 字符串,解析失败时回退为空 dict
+        try:
+            data = json_loads(data_json) if data_json else {}
+        except Exception:
+            logger.warning("历史记录数据 JSON 解析失败,标题=%s", title)
+            data = {}
+
+        basic = data.get("Basic", {}) or {}
+        episode = data.get("Episode", {}) or {}
+        download = data.get("Download", {}) or {}
+
+        status_id = download.get("status", 0)
+        status_name = _status_name(status_id)
+
+        return {
+            "time": time_val if time_val else basic.get("created_time", 0),
+            "title": title or basic.get("show_title", ""),
+            "url": episode.get("url", ""),
+            "status": status_name,
+            "file_size": download.get("total_size", 0),
+        }
+
+    def count_history(self) -> int:
+        """统计历史记录总数(两表合计)"""
+        sql = """
+            SELECT COUNT(*) FROM (
+                SELECT id FROM download_task
+                UNION ALL
+                SELECT id FROM completed_task
+            )
+        """
+        result = self.query(sql)
+        return result[0][0] if result else 0
+
+    def clear_history(self, older_than_days: Optional[int] = None) -> int:
+        """清空历史记录,返回被删除的条数
+
+        :param older_than_days: 仅清除 N 天前的记录;为 None 时清空全部
+        """
+        if older_than_days is None:
+            deleted = self.count_history()
+            self.execute("DELETE FROM download_task")
+            self.execute("DELETE FROM completed_task")
+            return deleted
+
+        # 仅清除 N 天前的记录(get_timestamp 返回秒级时间戳)
+        cutoff = get_timestamp() - older_than_days * 86400
+
+        cnt_dl = self.query(
+            "SELECT COUNT(*) FROM download_task WHERE created_time < ?",
+            (cutoff,),
+        )
+        cnt_done = self.query(
+            "SELECT COUNT(*) FROM completed_task WHERE completed_time < ?",
+            (cutoff,),
+        )
+        deleted = (cnt_dl[0][0] if cnt_dl else 0) + (cnt_done[0][0] if cnt_done else 0)
+
+        self.execute("DELETE FROM download_task WHERE created_time < ?", (cutoff,))
+        self.execute("DELETE FROM completed_task WHERE completed_time < ?", (cutoff,))
+        return deleted
+
+
+def _status_name(status_id: int) -> str:
+    """将 DownloadStatus 整数值转可读字符串,未知值回退为 'UNKNOWN'"""
+    try:
+        return DownloadStatus(status_id).name
+    except ValueError:
+        return "UNKNOWN"
