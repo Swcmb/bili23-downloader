@@ -367,6 +367,171 @@ class TaskDatabase(Database):
         self.execute("DELETE FROM completed_task WHERE completed_time < ?", (cutoff,))
         return deleted
 
+    # ---- 任务管理 API(供 cli.commands.task 使用) ----
+
+    def list_tasks(
+        self,
+        limit: int = 50,
+        status: Optional["DownloadStatus"] = None,
+    ) -> List[Dict[str, Any]]:
+        """列出现存下载任务(默认按 created_time 倒序)
+
+        :param limit:  返回条数上限
+        :param status: DownloadStatus 枚举,可选过滤
+        :return: dict 列表,每项含 task_id/title/status/status_id/progress/speed/file_size/created_time
+        """
+        # 一次性拉全部任务后内存过滤,避免依赖 SQLite JSON1 扩展
+        rows = self.query(
+            "SELECT task_id, title, created_time, data FROM download_task "
+            "ORDER BY created_time DESC"
+        )
+        tasks = [self._row_to_task_dict(row) for row in rows]
+
+        if status is not None:
+            status_int = int(status)
+            tasks = [t for t in tasks if t["status_id"] == status_int]
+
+        return tasks[:limit]
+
+    def _row_to_task_dict(self, row: tuple) -> Dict[str, Any]:
+        """将数据库行(task_id, title, created_time, data_json)解析为 task dict"""
+        task_id, title, created_time, data_json = row
+
+        try:
+            data = json_loads(data_json) if data_json else {}
+        except Exception:
+            logger.warning("任务数据 JSON 解析失败,task_id=%s", task_id)
+            data = {}
+
+        basic = data.get("Basic", {}) or {}
+        download = data.get("Download", {}) or {}
+        status_id = download.get("status", 0)
+
+        return {
+            "task_id": task_id,
+            "title": title or basic.get("show_title", ""),
+            "status": _status_name(status_id),
+            "status_id": status_id,
+            "progress": download.get("progress", 0),
+            "speed": download.get("speed", 0),
+            "file_size": download.get("total_size", 0),
+            "created_time": created_time or basic.get("created_time", 0),
+        }
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """按 task_id 查询单条任务,不存在返回 None"""
+        rows = self.query(
+            "SELECT task_id, title, created_time, data FROM download_task WHERE task_id = ?",
+            (task_id,),
+        )
+        if not rows:
+            return None
+        return self._row_to_task_dict(rows[0])
+
+    def pause_task(self, task_id: str):
+        """暂停任务(仅当状态为 DOWNLOADING 时允许)
+
+        :return: True=成功;False=状态不允许;None=任务不存在
+        """
+        return self._transition_status(
+            task_id, DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED
+        )
+
+    def resume_task(self, task_id: str):
+        """恢复任务(仅当状态为 PAUSED 时允许)
+
+        :return: True=成功;False=状态不允许;None=任务不存在
+        """
+        return self._transition_status(
+            task_id, DownloadStatus.PAUSED, DownloadStatus.DOWNLOADING
+        )
+
+    def _transition_status(self, task_id: str, expected_from, target_to):
+        """通用状态转换:校验当前状态为 expected_from,转为 target_to
+
+        :return: True=成功;False=状态不允许;None=任务不存在
+        """
+        rows = self.query(
+            "SELECT data FROM download_task WHERE task_id = ?",
+            (task_id,),
+        )
+        if not rows:
+            return None
+
+        data_json = rows[0][0]
+        try:
+            data = json_loads(data_json) if data_json else {}
+        except Exception:
+            logger.warning("任务数据 JSON 解析失败,task_id=%s", task_id)
+            data = {}
+
+        download = data.setdefault("Download", {})
+        current_status = download.get("status", 0)
+        if current_status != int(expected_from):
+            return False
+
+        download["status"] = int(target_to)
+        self.execute(
+            "UPDATE download_task SET data = ? WHERE task_id = ?",
+            (json_dumps(data), task_id),
+        )
+        return True
+
+    def cancel_task(self, task_id: str) -> bool:
+        """取消任务(删除记录)
+
+        :return: True=已删除;False=任务不存在
+        """
+        exists = self.query(
+            "SELECT 1 FROM download_task WHERE task_id = ?",
+            (task_id,),
+        )
+        if not exists:
+            return False
+
+        self.execute(
+            "DELETE FROM download_task WHERE task_id = ?",
+            (task_id,),
+        )
+        return True
+
+    def clear_tasks(self, status: Optional["DownloadStatus"] = None) -> int:
+        """清空下载任务,可按状态过滤
+
+        :param status: DownloadStatus 枚举,仅清除此状态的任务;None 表示全部
+        :return: 已删除条数
+        """
+        rows = self.query("SELECT task_id, data FROM download_task")
+
+        if status is None:
+            to_delete = [task_id for task_id, _ in rows]
+        else:
+            status_int = int(status)
+            to_delete = [
+                task_id
+                for task_id, data_json in rows
+                if _extract_status_id(data_json) == status_int
+            ]
+
+        for task_id in to_delete:
+            self.execute(
+                "DELETE FROM download_task WHERE task_id = ?",
+                (task_id,),
+            )
+        return len(to_delete)
+
+
+def _extract_status_id(data_json: Optional[str]) -> int:
+    """从任务 data JSON 中提取 Download.status 整数,解析失败回退为 0"""
+    if not data_json:
+        return 0
+    try:
+        data = json_loads(data_json)
+    except Exception:
+        return 0
+    download = data.get("Download", {}) or {}
+    return int(download.get("status", 0) or 0)
+
 
 def _status_name(status_id: int) -> str:
     """将 DownloadStatus 整数值转可读字符串,未知值回退为 'UNKNOWN'"""
