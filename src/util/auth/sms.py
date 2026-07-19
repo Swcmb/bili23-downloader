@@ -1,11 +1,15 @@
-from PySide6.QtCore import QObject, Signal
+# src/util/auth/sms.py
+"""短信登录 - 纯 Python 实现
 
-from ..network.request import NetworkRequestWorker, RequestType
-from ..common.signal_bus import signal_bus
-from ..thread.async_ import AsyncTask
-
-from .captcha import CaptchaInfo
+T2.8 改造:
+- 移除 GUI 框架依赖
+- Signal 改用 common.signal_bus 中的纯 Python Signal
+- AsyncTask.run() 旧 API 改为新实例 API: AsyncTask(func).start()
+- network.request 改为延迟导入避免传递 GUI 框架依赖
+"""
+from ..common.signal_bus import signal_bus, Signal
 from .base import AuthBase
+
 
 class SMSInfo:
     cid = ""
@@ -15,7 +19,10 @@ class SMSInfo:
 
     countdown = 60
 
-class SMS(AuthBase, QObject):
+
+class SMS(AuthBase, object):
+    """短信验证码登录流程封装"""
+
     sms_sent = Signal()
     sms_login_success = Signal()
 
@@ -23,7 +30,6 @@ class SMS(AuthBase, QObject):
 
     def __init__(self, parent = None):
         AuthBase.__init__(self)
-        QObject.__init__(self, parent)
 
         self._cleaned_up = False
 
@@ -66,11 +72,16 @@ class SMS(AuthBase, QObject):
 
         url = "https://passport.bilibili.com/x/passport-login/web/sms/send"
 
+        # 延迟导入:network.request 顶部仍含 Qt 依赖,避免传递触发 GUI 框架加载
+        from ..network.request import NetworkRequestWorker, RequestType
+        from ..thread.async_ import AsyncTask
+        from .captcha import CaptchaInfo
+
         worker = NetworkRequestWorker(url, request_type = RequestType.POST, params = params)
         worker.success.connect(on_success)
         worker.error.connect(self.on_error)
 
-        AsyncTask.run(worker)
+        AsyncTask(worker.run).start()
 
     def login(self):
         def on_success(response: dict):
@@ -91,14 +102,19 @@ class SMS(AuthBase, QObject):
                 "captcha_key": CaptchaInfo.captcha_key,
                 "go_url": "https://www.bilibili.com/"
             }
-        
+
         url = "https://passport.bilibili.com/x/passport-login/web/login/sms"
+
+        # 延迟导入同上
+        from ..network.request import NetworkRequestWorker, RequestType
+        from ..thread.async_ import AsyncTask
+        from .captcha import CaptchaInfo
 
         worker = NetworkRequestWorker(url, request_type = RequestType.POST, params = params)
         worker.success.connect(on_success)
         worker.error.connect(self.on_error)
 
-        AsyncTask.run(worker)
+        AsyncTask(worker.run).start()
 
     def update_cid_tel(self, cid: str, tel: str):
         SMSInfo.cid = cid
