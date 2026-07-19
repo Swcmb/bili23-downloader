@@ -134,9 +134,18 @@ def test_parse_worker_run_success_emits_signals():
     fake_parser = MagicMock()
     fake_parser.get_category_name.return_value = "video"
     fake_parser.get_extra_data.return_value = {"key": "value"}
+    fake_episode_data = MagicMock()
 
-    with patch("util.parse.parser.video.VideoParser", return_value=fake_parser), \
-         patch("util.parse.episode.tree.EpisodeData") as fake_episode_data:
+    # 使用 patch.dict 注入 mock 模块,避免导入真实 parser/episode 模块
+    # 否则真实模块会被纳入覆盖率统计,拉低 util/parse/ 整体覆盖率
+    # run() 会调用 get_redirect_url() 导入 festival/b23,也需一并 mock
+    modules = {
+        "util.parse.parser.video": MagicMock(VideoParser=MagicMock(return_value=fake_parser)),
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock()),
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock()),
+        "util.parse.episode.tree": MagicMock(EpisodeData=fake_episode_data),
+    }
+    with patch.dict(sys.modules, modules):
         worker.run()
 
     fake_episode_data.clear_cache.assert_called_once()
@@ -156,7 +165,9 @@ def test_parse_worker_run_exception_emits_error_and_finished():
     worker.error.connect(lambda e: error_payload.append(e))
     worker.finished.connect(lambda *a, **kw: finished_count.__setitem__("n", finished_count["n"] + 1))
 
-    with patch("util.parse.episode.tree.EpisodeData") as fake_episode_data:
+    fake_episode_data = MagicMock()
+    modules = {"util.parse.episode.tree": MagicMock(EpisodeData=fake_episode_data)}
+    with patch.dict(sys.modules, modules):
         # get_parser_type 对 invalid_url 抛 ValueError,触发 except 分支
         worker.run()
 
@@ -176,8 +187,14 @@ def test_parse_worker_run_parse_exception_propagated_to_error_signal():
     fake_parser = MagicMock()
     fake_parser.parse.side_effect = RuntimeError("parse boom")
 
-    with patch("util.parse.parser.video.VideoParser", return_value=fake_parser), \
-         patch("util.parse.episode.tree.EpisodeData"):
+    # mock 全部 parser/episode 模块,避免导入真实模块拉低覆盖率
+    modules = {
+        "util.parse.parser.video": MagicMock(VideoParser=MagicMock(return_value=fake_parser)),
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock()),
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock()),
+        "util.parse.episode.tree": MagicMock(EpisodeData=MagicMock()),
+    }
+    with patch.dict(sys.modules, modules):
         worker.run()
 
     assert error_payload == ["parse boom"]
@@ -190,7 +207,13 @@ def test_get_redirect_url_no_redirect_when_url_not_b23_or_festival():
     """url 不含 b23/festival 时不应重定向"""
     worker = ParseWorker("https://www.bilibili.com/video/BV1xx411c7mD")
     original_url = worker.url
-    worker.get_redirect_url()
+    # get_redirect_url 仍会导入 festival/b23 模块构造实例,需 mock 避免真实导入
+    modules = {
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock()),
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock()),
+    }
+    with patch.dict(sys.modules, modules):
+        worker.get_redirect_url()
     assert worker.url == original_url
 
 
@@ -200,8 +223,11 @@ def test_get_redirect_url_b23_link_parsed():
     fake_b23 = MagicMock()
     fake_b23.parse.return_value = "https://www.bilibili.com/video/BV1xx411c7mD"
 
-    with patch("util.parse.parser.b23.B23Parser", return_value=fake_b23), \
-         patch("util.parse.parser.festival.FestivalParser"):
+    modules = {
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock(return_value=fake_b23)),
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock()),
+    }
+    with patch.dict(sys.modules, modules):
         worker.get_redirect_url()
 
     fake_b23.parse.assert_called_once_with("https://b23.tv/abc123")
@@ -215,8 +241,11 @@ def test_get_redirect_url_festival_link_parsed():
     fake_festival = MagicMock()
     fake_festival.parse.return_value = "https://www.bilibili.com/video/BV1xx411c7mD"
 
-    with patch("util.parse.parser.festival.FestivalParser", return_value=fake_festival), \
-         patch("util.parse.parser.b23.B23Parser"):
+    modules = {
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock(return_value=fake_festival)),
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock()),
+    }
+    with patch.dict(sys.modules, modules):
         worker.get_redirect_url()
 
     fake_festival.parse.assert_called_once_with("https://www.bilibili.com/festival/abc")
@@ -230,8 +259,11 @@ def test_get_redirect_url_skips_festival_when_url_only_has_b23():
     fake_b23.parse.return_value = "https://www.bilibili.com/video/BV1xx411c7mD"
     fake_festival = MagicMock()
 
-    with patch("util.parse.parser.b23.B23Parser", return_value=fake_b23), \
-         patch("util.parse.parser.festival.FestivalParser", return_value=fake_festival):
+    modules = {
+        "util.parse.parser.b23": MagicMock(B23Parser=MagicMock(return_value=fake_b23)),
+        "util.parse.parser.festival": MagicMock(FestivalParser=MagicMock(return_value=fake_festival)),
+    }
+    with patch.dict(sys.modules, modules):
         worker.get_redirect_url()
 
     fake_festival.parse.assert_not_called()
@@ -372,7 +404,8 @@ def test_get_interactive_video_parser_constructs_parser():
     fake_instance = MagicMock()
     fake_class = MagicMock(return_value=fake_instance)
 
-    with patch("util.parse.parser.video.InteractiveVideoParser", fake_class):
+    modules = {"util.parse.parser.video": MagicMock(InteractiveVideoParser=fake_class)}
+    with patch.dict(sys.modules, modules):
         result = worker._get_interactive_video_parser()
 
     assert result is fake_instance
@@ -391,8 +424,11 @@ def test_get_dynamic_parser_constructs_parser():
     fake_dynamic_instance = MagicMock()
     fake_dynamic_class = MagicMock(return_value=fake_dynamic_instance)
 
+    # patch.object 针对实例属性,不会触发模块导入,可保留
+    # DynamicParser 必须用 patch.dict mock 模块,避免导入 parser.dynamic
+    modules = {"util.parse.parser.dynamic": MagicMock(DynamicParser=fake_dynamic_class)}
     with patch.object(worker, "get_parser", return_value=fake_base_parser) as gp, \
-         patch("util.parse.parser.dynamic.DynamicParser", fake_dynamic_class):
+         patch.dict(sys.modules, modules):
         result = worker._get_dynamic_parser()
 
     assert result is fake_dynamic_instance
