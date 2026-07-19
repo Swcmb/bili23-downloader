@@ -1,108 +1,101 @@
-from PySide6.QtCore import Signal, QObject
+# src/util/common/signal_bus.py
+"""事件总线 - 纯 Python 实现,替代 Qt Signal/QObject
 
-from .enum import ToastNotificationCategory
-from .config import config
+设计要点:
+- Signal 用回调列表替代 Qt Signal
+- emit 在调用线程同步执行(不再支持 QueuedConnection)
+- 跨线程安全通过 threading.Lock 保护回调列表
+- 保留 main_window_ready 和 pending_signals 机制兼容原代码
+"""
+import threading
+from typing import Callable, List, Tuple, Any
 
-from threading import Lock
 
-class SignalBus:
-    class ToastNotification(QObject):
-        # 用于在 MainWindow 中显示 Toast 通知
-        show = Signal(ToastNotificationCategory, str, str)
+class Signal:
+    """纯 Python 信号,API 兼容 PySide6.QtCore.Signal
 
-        show_long_message = Signal(ToastNotificationCategory, str, str)
-
-        sys_show = Signal(ToastNotificationCategory, str, str)
-
-    class Parse(QObject):
-        update_parse_list = Signal(str, str, object, object)
-        update_parse_list_count = Signal(str, int)
-
-        preview_init = Signal(dict, bool)
-        preview_finish = Signal()
-
-        query_video_info = Signal(int, int, object)
-        query_audio_info = Signal(int, object)
-
-        update_column_settings = Signal()
-        update_preview_info = Signal()
-
-        parse_url = Signal(str)
-
-        search_keyword = Signal(str)
-
-        show_interactive_video_dialog = Signal(dict)
-
-    class Download(QObject):
-        create_task = Signal(list, bool)
-
-        show_duplicate_download_dialog = Signal(object, object, object)
-        show_skip_duplicate_download_toast = Signal(str)
-
-        add_to_downloading_list = Signal(list)
-        auto_manage_concurrent_downloads = Signal()
-        add_to_completed_list = Signal(list)
-
-        remove_from_downloading_list = Signal(object)
-        remove_from_completed_list = Signal(object)
-
-        sort_downloading_list = Signal(str, bool)
-        sort_completed_list = Signal(str, bool)
-
-        update_downloading_count = Signal(int)
-        update_downloading_item = Signal(object)
-
-        start_next_task = Signal()
-
-    class Login(QObject):
-        # 用于登录相关的信号
-        start_server = Signal()
-        stop_server = Signal()
-
-        send_sms = Signal()
-
-        update_avatar = Signal(object)
-
-    class Update(QObject):
-        check = Signal(bool)
-        show_dialog = Signal(dict)
-
-    class Interface(QObject):
-        mica_effect_changed = Signal(bool)
+    提供 connect/disconnect/emit 三个核心方法,回调列表通过
+    threading.Lock 保护,确保跨线程 emit 安全。
+    """
 
     def __init__(self):
-        self.toast = self.ToastNotification()
-        self.parse = self.Parse()
-        self.download = self.Download()
-        self.login = self.Login()
-        self.update = self.Update()
-        self.interface = self.Interface()
+        # 回调列表:用 Lock 保护,支持并发 connect/disconnect/emit
+        self._callbacks: List[Callable] = []
+        self._lock = threading.Lock()
 
-        self.pending_signals = []  # 存储在主窗口初始化完成前发出的信号，格式为 (signal, args, kwargs)
-
-        self._lock = Lock() # 用于保护待发送列表的线程锁
-
-    def emit_signal(self, signal, *args, **kwargs):
-        if config.main_window_ready:
-            # 初始化完成，直接发送信号
-            signal.emit(*args, **kwargs)
-        else:
-            # 否则加入待发送列表。使用线程锁保证多线程安全
-            with self._lock:
-                # 双重检查，防止在获取锁的过程中主窗口已初始化完成
-                if config.main_window_ready:
-                    signal.emit(*args, **kwargs)
-                else:
-                    self.pending_signals.append((signal, args, kwargs))
-
-    def emit_pending_signals(self):
-        # 主窗口初始化完成后调用，发送所有待发送的信号
-        config.main_window_ready = True
-
+    def connect(self, callback: Callable) -> None:
+        """注册回调,重复注册同一回调自动去重"""
         with self._lock:
-            for signal, args, kwargs in self.pending_signals:
-                signal.emit(*args, **kwargs)
-            
-            self.pending_signals.clear()
+            if callback not in self._callbacks:
+                self._callbacks.append(callback)
 
+    def disconnect(self, callback: Callable) -> None:
+        """注销回调,不存在时静默忽略"""
+        with self._lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+
+    def emit(self, *args: Any, **kwargs: Any) -> None:
+        """同步触发所有回调(在调用线程执行)
+
+        先在锁内拷贝回调列表,再在锁外执行,避免回调中再次
+        connect/disconnect 导致死锁。
+        """
+        with self._lock:
+            callbacks = list(self._callbacks)
+        for cb in callbacks:
+            cb(*args, **kwargs)
+
+
+class SignalBus:
+    """信号总线单例,聚合所有原 Qt 信号名称
+
+    原实现中 ToastNotification/Parse/Download/Login/Update/Interface
+    为嵌套 QObject 子类,改造后统一为 Signal 实例属性,API 简化为
+    connect/emit/disconnect。
+    """
+
+    def __init__(self):
+        # 保留原信号名称(原嵌套类名转为 Signal 实例属性)
+        self.ToastNotification = Signal()
+        self.Parse = Signal()
+        self.Download = Signal()
+        self.Login = Signal()
+        self.Update = Signal()
+        self.Interface = Signal()
+        # 兼容原 main_window_ready 机制(原存储于 config,改为本机属性)
+        self.main_window_ready: bool = False
+        # 待发送信号缓存:格式 (signal_name, args, kwargs)
+        self.pending_signals: List[Tuple[str, tuple, dict]] = []
+        self._pending_lock = threading.Lock()
+
+    def emit_signal(self, signal_name: str, *args: Any, **kwargs: Any) -> None:
+        """触发命名信号,若 main_window_ready=False 则缓存到 pending_signals
+
+        双重检查:获取锁后再确认一次 ready 状态,防止竞态条件下
+        丢失信号(与原实现行为一致)。
+        """
+        if not self.main_window_ready:
+            with self._pending_lock:
+                if not self.main_window_ready:
+                    self.pending_signals.append((signal_name, args, kwargs))
+                    return
+        sig = getattr(self, signal_name, None)
+        if sig is None:
+            raise AttributeError(f"SignalBus has no signal named '{signal_name}'")
+        sig.emit(*args, **kwargs)
+
+    def emit_pending_signals(self) -> None:
+        """标记 main_window_ready=True 并 flush 所有待发送信号"""
+        self.main_window_ready = True
+        with self._pending_lock:
+            pending = list(self.pending_signals)
+            self.pending_signals.clear()
+        for signal_name, args, kwargs in pending:
+            sig = getattr(self, signal_name, None)
+            if sig is not None:
+                sig.emit(*args, **kwargs)
+
+
+# 模块级单例,保持与原代码 `from util.common.signal_bus import signal_bus` 兼容
 signal_bus = SignalBus()
