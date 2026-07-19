@@ -1,6 +1,3 @@
-from PySide6.QtCore import QRunnable, QMetaObject, Qt, Q_ARG
-
-from ...network.request import SyncNetWorkRequest
 from ...parse.episode.tree import Attribute
 from ...parse.parser.base import ParserBase
 
@@ -9,8 +6,6 @@ from ...common.translator import Translator
 from ...common._json import json_dumps
 from ...common.config import config
 
-from ..parse.video_info import VideoInfoParser
-from ..parse.audio_info import AudioInfoParser
 from ..task.info import TaskInfo
 
 from urllib.parse import urlencode
@@ -18,7 +13,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class ParseWorker(QRunnable, ParserBase):
+class ParseWorker(ParserBase):
+    """下载链接解析 Worker(T2.4 移除 Qt 依赖,仅继承 ParserBase)
+
+    信号传递改为直接方法调用:
+    - 解析成功:调用 self.parent.on_parse_finished(download_info_json)
+    - 解析失败:调用 self.parent.on_parse_error(error_message)
+    """
     def __init__(self, task_info: TaskInfo, parent = None):
         super().__init__()
 
@@ -36,12 +37,9 @@ class ParseWorker(QRunnable, ParserBase):
                 download_info = self.parse_download_info()
                 download_info_json = json_dumps(download_info)
 
-                QMetaObject.invokeMethod(
-                    self.parent,
-                    "on_parse_finished",
-                    Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, download_info_json)     # 由于不支持直接传递字典，所以传递 json 字符串，在主线程再转换回来
-                )
+                # 直接调用 parent 方法(替代原 Qt 跨线程调用机制)
+                # 由于不支持直接传递字典,所以传递 json 字符串,由 parent 反序列化
+                self.parent.on_parse_finished(download_info_json)
 
         except Exception as e:
             logger.exception("解析下载链接失败")
@@ -77,6 +75,9 @@ class ParseWorker(QRunnable, ParserBase):
                 self.task_info.Download.media_type = MediaType.M4A
 
     def get_video_info(self):
+        # 延迟导入:network.request 模块顶部含 PySide6 导入,需避免传递依赖
+        from ...network.request import SyncNetWorkRequest
+
         params = {
             "bvid": self.task_info.Episode.bvid,
             "cid": self.task_info.Episode.cid,
@@ -96,6 +97,8 @@ class ParseWorker(QRunnable, ParserBase):
         self.info_data = response.copy()["data"]
 
     def get_bangumi_info(self):
+        from ...network.request import SyncNetWorkRequest
+
         params = {
             "bvid": self.task_info.Episode.bvid,
             "cid": self.task_info.Episode.cid,
@@ -115,6 +118,8 @@ class ParseWorker(QRunnable, ParserBase):
         self.info_data = response.copy()["result"]
 
     def get_cheese_info(self):
+        from ...network.request import SyncNetWorkRequest
+
         params = {
             "avid": self.task_info.Episode.aid,
             "cid": self.task_info.Episode.cid,
@@ -135,6 +140,8 @@ class ParseWorker(QRunnable, ParserBase):
         self.info_data = response.copy()["data"]
 
     def get_audio_info(self):
+        from ...network.request import SyncNetWorkRequest
+
         params = {
             "sid": self.task_info.Episode.sid,
             "privilege": 2,
@@ -153,6 +160,10 @@ class ParseWorker(QRunnable, ParserBase):
         self.info_data = response.copy()["data"]
 
     def parse_download_info(self):
+        # 延迟导入:video_info/audio_info 间接依赖 network.request(顶部含 PySide6)
+        from ..parse.video_info import VideoInfoParser
+        from ..parse.audio_info import AudioInfoParser
+
         total_size = 0
         download_list = {}
 
@@ -187,12 +198,8 @@ class ParseWorker(QRunnable, ParserBase):
     def on_parse_error(self, error_message: str):
         self.error = True
 
-        QMetaObject.invokeMethod(
-            self.parent,
-            "on_parse_error",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, error_message)
-        )
+        # 直接调用 parent 方法(替代原 Qt 跨线程调用机制)
+        self.parent.on_parse_error(error_message)
 
     def check_response(self, response: dict):
         if response.get("code", -1) != 0:
@@ -201,7 +208,7 @@ class ParseWorker(QRunnable, ParserBase):
             self.on_parse_error(message)
 
             raise RuntimeError(message)
-        
+
     def get_output_file_ext(self):
         has_video = self.task_info.Download.type & DownloadType.VIDEO != 0
         has_audio = self.task_info.Download.type & DownloadType.AUDIO != 0
@@ -212,13 +219,13 @@ class ParseWorker(QRunnable, ParserBase):
 
         if self.task_info.Download.merge_video_audio or self.task_info.Download.video_parts_count > 0:
             self.task_info.File.merge_file_ext = config.get(config.video_container).value
-    
+
     def filter_download_list(self, download_list: dict):
         # 根据 task_info 中已有的 queue 过滤下载列表，去掉不需要下载的条目
         if not self.task_info.Download.queue:
             # 如果没有 queue 信息，说明是首次解析，直接返回完整的下载列表
             return download_list
-        
+
         # 否则根据 queue 过滤下载列表，去掉不需要下载的条目
         filtered_download_list = {key: entry for key, entry in download_list.items() if key in self.task_info.Download.queue}
 
