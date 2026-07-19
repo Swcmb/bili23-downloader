@@ -16,10 +16,14 @@ class Signal:
 
     提供 connect/disconnect/emit 三个核心方法,回调列表通过
     threading.Lock 保护,确保跨线程 emit 安全。
+
+    与 Qt Signal(*types) 语法兼容:__init__ 接受并忽略 *args,
+    因为纯 Python 实现中参数类型由 emit 时决定,无需在定义时声明。
     """
 
-    def __init__(self):
+    def __init__(self, *args: Any, **kwargs: Any):
         # 回调列表:用 Lock 保护,支持并发 connect/disconnect/emit
+        # *args/**kwargs 接受并忽略,兼容 Qt Signal(object) 等类型声明语法
         self._callbacks: List[Callable] = []
         self._lock = threading.Lock()
 

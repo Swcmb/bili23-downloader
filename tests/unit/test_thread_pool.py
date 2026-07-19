@@ -30,3 +30,26 @@ def test_no_pyside6_import():
             del sys.modules[mod]
     import util.thread.pool  # noqa: F401
     assert not any(m.startswith("PySide6") for m in sys.modules)
+
+
+def test_worker_base_stop_signal():
+    """WorkerBase 停止信号机制"""
+    from util.thread.worker_base import WorkerBase
+    worker = WorkerBase()
+    assert worker.is_stopped is False
+    worker.stop()
+    assert worker.is_stopped is True
+
+
+def test_worker_base_has_signals():
+    """WorkerBase 暴露 success/error/finished 三个 Signal 属性"""
+    from util.thread.worker_base import WorkerBase
+    worker = WorkerBase()
+    assert hasattr(worker, "success")
+    assert hasattr(worker, "error")
+    assert hasattr(worker, "finished")
+    # 验证信号可 connect/emit
+    received = []
+    worker.finished.connect(lambda: received.append(1))
+    worker.finished.emit()
+    assert received == [1]
