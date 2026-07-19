@@ -1,24 +1,29 @@
-from PySide6.QtCore import QObject, Slot, Signal
+# src/util/parse/preview/worker.py
+"""预览 Worker - 去除 Qt 依赖
 
-from ...network.request import SyncNetWorkRequest
-from ...network.download_url import resolve_download_url
+改造要点:
+- 移除 `from PySide6.QtCore import QObject, Slot, Signal`
+- QueryInfoWorker 继承 `util.thread.worker_base.WorkerBase`
+- network.request / network.download_url 改为延迟导入,
+  避免触发 network 模块尚未完成的 Qt 改造(T2.10)的传递依赖
+- 移除 `@Slot()` 装饰器
+"""
 from ...common.enum import MediaType
+from ...thread.worker_base import WorkerBase
 
 from .info import PreviewerInfo
 
-class QueryInfoWorker(QObject):
-    success = Signal(dict, object)
-    error = Signal(str)
-    finished = Signal()
+
+class QueryInfoWorker(WorkerBase):
+    """预览信息查询 Worker"""
 
     def __init__(self, media_info: dict):
-        super().__init__()
+        WorkerBase.__init__(self)
 
         self.media_info = media_info
         self.file_size = 0
         self.break_flag = False
 
-    @Slot()
     def run(self):
         try:
             match MediaType(PreviewerInfo.media_type):
@@ -34,9 +39,9 @@ class QueryInfoWorker(QObject):
 
             if self.file_size == 0:
                 raise RuntimeError("无法获取文件大小")
-            
+
             self.success.emit(self.media_info, self.file_size)
-        
+
         except Exception as e:
             self.error.emit(str(e))
 
@@ -54,16 +59,22 @@ class QueryInfoWorker(QObject):
         self.get_mp4_file_size(query_url)
 
     def get_dash_file_size(self, download_urls: list):
+        # 延迟导入:network.download_url 当前(T2.1 阶段)仍可能间接依赖 Qt
+        from ...network.download_url import resolve_download_url
+
         result = resolve_download_url(download_urls, min_file_size = 10240)
         self.file_size = result["file_size"]
 
         return self.file_size
 
     def get_mp4_file_size(self, query_url: str):
+        # 延迟导入:network.request 当前(T2.1 阶段)仍依赖 PySide6
+        from ...network.request import SyncNetWorkRequest
+
         request = SyncNetWorkRequest(query_url)
         response = request.run()
 
-        for durl_entry in self.get_durl_list(response):            
+        for durl_entry in self.get_durl_list(response):
             self.file_size += durl_entry.get("size", 0)
             self.media_info["timelength"] += durl_entry.get("length", 0)
 

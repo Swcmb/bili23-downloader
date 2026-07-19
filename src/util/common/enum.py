@@ -1,5 +1,3 @@
-from PySide6.QtCore import QLocale
-
 from enum import Enum, IntEnum, IntFlag
 
 class ToastNotificationCategory(Enum):
@@ -23,11 +21,13 @@ class Scaling(Enum):
     AUTO = "Auto"
 
 class Language(Enum):
-    CHINESE_SIMPLIFIED = QLocale("zh_CN")
-    CHINESE_TRADITIONAL = QLocale("zh_TW")
-    ENGLISH = QLocale("en_US")
+    # 原 PySide6.QLocale 实例改用 BCP 47 语言标签字符串,功能等价
+    # (serializer.LanguageSerializer 已废弃,新代码直接使用字符串值)
+    CHINESE_SIMPLIFIED = "zh_CN"
+    CHINESE_TRADITIONAL = "zh_TW"
+    ENGLISH = "en_US"
 
-    AUTO = QLocale()
+    AUTO = "Auto"
 
 class WhenClose(Enum):
     EXIT = 1
