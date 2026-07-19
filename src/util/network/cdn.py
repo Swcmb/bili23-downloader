@@ -9,7 +9,7 @@ class CDN:
         filtered_url_list = CDN.filter(url_list)
         replaced_url_list = CDN.replace(filtered_url_list)
 
-        if config.get(config.prefer_cdn_server_provider):
+        if config.get("prefer_cdn_server_provider"):
             # 将替换后的 URL 列表放在前面，原始 URL 列表放在后面，以便优先使用替换后的 URL
             url_list = replaced_url_list + filtered_url_list
         else:
@@ -64,14 +64,14 @@ class CDN:
     
     @staticmethod
     def get_cdn_server_list():
-        if config.get(config.area) == Area.CN:
-            return config.get(config.cn_cdn_server_list)
+        if config.get("area") == Area.CN:
+            return config.get("cn_cdn_server_list")
         else:
-            return config.get(config.ov_cdn_server_list)
+            return config.get("ov_cdn_server_list")
         
     @staticmethod
     def set_cdn_server_list(cdn_list: list[dict]):
-        if config.get(config.area) == Area.CN:
+        if config.get("area") == Area.CN:
             config.set(config.cn_cdn_server_list, cdn_list)
         else:
             config.set(config.ov_cdn_server_list, cdn_list)

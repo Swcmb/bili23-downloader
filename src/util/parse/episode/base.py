@@ -41,7 +41,7 @@ class EpisodeParserBase:
             if attr & Attribute.HISTORY_BIT or attr & Attribute.WATCH_LATER_BIT:
                 title = node.number
 
-        if config.get(config.auto_select_mode) == AutoSelectMode.MANUAL:
+        if config.get("auto_select_mode") == AutoSelectMode.MANUAL:
             current_episode_data = None
 
         signal_bus.parse.update_parse_list.emit(title, self.category_name, root_node, current_episode_data)

@@ -39,7 +39,7 @@ class UserManager(AuthBase):
                 logger.info("用户信息获取成功，用户名: %s, UID: %s", config.user_uname, config.user_uid)
 
             else:
-                if config.get(config.is_login):
+                if config.get("is_login"):
                     config.is_expired = True
 
                     self.show_toast_error(
@@ -92,7 +92,7 @@ class UserManager(AuthBase):
             self.show_toast_error(Translator.ERROR_MESSAGES("LOGOUT_FAILED"), error_message)
 
         params = {
-            "biliCSRF": config.get(config.bili_jct)
+            "biliCSRF": config.get("bili_jct")
         }
 
         url = "https://passport.bilibili.com/login/exit/v2"

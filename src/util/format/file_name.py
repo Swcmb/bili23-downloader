@@ -106,12 +106,12 @@ class FileNameFormatter:
         
     def get_rule_from_config(self, type_id: int = None):
         # 从命名规则配置中查询到对应的命名规则模板
-        for entry in config.get(config.naming_rule_list):
+        for entry in config.get("naming_rule_list"):
             if entry["type"] == type_id and entry["default"]:
                 return entry["rule"]
 
     def get_rule_by_id(self, rule_id: int):
-        for entry in config.get(config.naming_rule_list):
+        for entry in config.get("naming_rule_list"):
             if entry["id"] == rule_id:
                 return entry["rule"]
 
@@ -198,7 +198,7 @@ class FileNameFormatter:
 
         rule_list = []
 
-        for entry in config.get(config.naming_rule_list):
+        for entry in config.get("naming_rule_list"):
             if entry["type"] == type_id:
                 rule_list.append(entry)
 

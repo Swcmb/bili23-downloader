@@ -44,12 +44,12 @@ class Updater(object):
 
         if info.get("should_update"):
 
-            if config.get(config.skip_version) == version and not self.manual:
+            if config.get("skip_version") == version and not self.manual:
                 return
 
             signal_bus.update.show_dialog.emit(info)
 
-            logger.info("检测到新版本：%s，当前版本：%s", version, config.get(config.app_version))
+            logger.info("检测到新版本：%s，当前版本：%s", version, config.get("app_version"))
 
         else:
             if self.manual:
@@ -68,7 +68,7 @@ class Updater(object):
         params = {
             "current_version": config.app_version,
             "current_comparable_version": config.app_comparable_version,
-            "include_preview": config.get(config.include_prerelease)
+            "include_preview": config.get("include_prerelease")
         }
 
         url = "https://verhub.hanloth.cn/api/v1/public/scottsloan-bili23-downloader/versions/check-update"

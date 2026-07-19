@@ -19,7 +19,7 @@ class MetadataParser(AdditionalParserBase):
         super().__init__(task_info)
 
     def parse(self):
-        match config.get(config.metadata_type):
+        match config.get("metadata_type"):
             case MetadataType.NFO:
                 if self.task_info.Episode.attribute & Attribute.VIDEO_BIT != 0:
                     # 投稿视频需要额外获取 tag 和 category 信息

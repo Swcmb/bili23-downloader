@@ -33,7 +33,7 @@ class CookieManager(AuthBase):
             self.get_uuid()
             self.get_b_lsid()
             self.get_b_nut()
-            self.get_buvid_fp(config.get(config.user_agent), 31)
+            self.get_buvid_fp(config.get("user_agent"), 31)
 
             update_cookies()
 
@@ -42,7 +42,7 @@ class CookieManager(AuthBase):
         def on_error(error_message: str):
             self.show_toast_error("获取 buvid 失败", error_message)
 
-        if get_timestamp() < config.get(config.buvid_expires):
+        if get_timestamp() < config.get("buvid_expires"):
             return True
 
         url = "https://api.bilibili.com/x/frontend/finger/spi"
@@ -161,7 +161,7 @@ class CookieManager(AuthBase):
         def on_error(error_message: str):
             self.show_toast_error("获取 bili_ticket 失败", error_message)
 
-        if get_timestamp() < config.get(config.bili_ticket_expires):
+        if get_timestamp() < config.get("bili_ticket_expires"):
             return
 
         url = "https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket"
@@ -170,7 +170,7 @@ class CookieManager(AuthBase):
             "key_id": "ec02",
             "hexsign": self.hmac_sha256("XgwSnGZ1p", f"ts{get_timestamp()}"),
             "context[ts]": f"{get_timestamp()}",
-            "csrf": config.get(config.bili_jct)
+            "csrf": config.get("bili_jct")
         }
 
         worker = NetworkRequestWorker(url, request_type = RequestType.POST, params = params)
@@ -215,8 +215,8 @@ class CookieManager(AuthBase):
         url = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi"
 
         payload = get_exclimbwuzhi_payload(
-            config.get(config.user_agent),
-            config.get(config.uuid)
+            config.get("user_agent"),
+            config.get("uuid")
         )
 
         worker = NetworkRequestWorker(url, request_type = RequestType.POST, data = payload, content_type = "application/json")

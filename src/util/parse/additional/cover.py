@@ -11,7 +11,7 @@ class CoverParser(AdditionalParserBase):
         super().__init__(task_info)
 
     def parse(self):
-        suffix = config.get(config.cover_type).value
+        suffix = config.get("cover_type")
 
         for i in range(3):
             try:

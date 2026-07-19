@@ -42,7 +42,7 @@ class SubtitlesASS:
         )
     
     def _get_style_info(self):
-        style = config.get(config.subtitle_style)
+        style = config.get("subtitle_style")
         
         screen_width = style["resolution"]["width"]
         screen_height = style["resolution"]["height"]

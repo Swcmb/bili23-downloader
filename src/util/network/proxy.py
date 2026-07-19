@@ -3,13 +3,13 @@ from ..common.config import config
 
 class Proxy:
     def __init__(self):
-        self.enabled = config.get(config.proxy_enabled)
-        self.type = config.get(config.proxy_type)
+        self.enabled = config.get("proxy_enabled")
+        self.type = config.get("proxy_type")
 
-        self.server = config.get(config.proxy_server)
-        self.port = config.get(config.proxy_port)
-        self.uname = config.get(config.proxy_uname)
-        self.password = config.get(config.proxy_password)
+        self.server = config.get("proxy_server")
+        self.port = config.get("proxy_port")
+        self.uname = config.get("proxy_uname")
+        self.password = config.get("proxy_password")
 
     def set_data(self, data: dict):
         self.enabled = True

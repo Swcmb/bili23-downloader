@@ -10,8 +10,8 @@
 - threading.Lock 保护并发写入,确保线程安全(AC-024-5)
 - 损坏 JSON 自动备份为 .bak 并重置为默认值(AC-024-3)
 
-注意:原 API `config.get(config.xxx).value` 已废弃,
-新 API 为 `config.get("xxx")`,待 T2.13 全量替换 53 个文件 162 处调用。
+API 说明:原 GUI 使用 qfluentwidgets.QConfig 风格的属性访问,现已统一改为
+字符串键访问 `config.get("xxx")` / `config.set("xxx", value)`,T2.13 已完成全量替换。
 """
 import json
 import logging

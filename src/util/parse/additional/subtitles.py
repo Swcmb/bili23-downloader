@@ -21,7 +21,7 @@ class SubtitlesParser(AdditionalParserBase):
             language = entry["language"]
             data = entry["data"]
 
-            match config.get(config.subtitle_type):
+            match config.get("subtitle_type"):
                 case SubtitleType.SRT:
                     contents, suffix = self._to_srt(data)
 
@@ -88,7 +88,7 @@ class SubtitlesParser(AdditionalParserBase):
         subtitles_data_list = []
 
         subtitles_url_list = self._get_subtitles_url_list()
-        language_config = config.get(config.subtitle_language)
+        language_config = config.get("subtitle_language")
 
         for entry in subtitles_url_list:
             language = entry["lan"]

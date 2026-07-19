@@ -72,7 +72,7 @@ class DynamicParser(ParserBase):
             self._update_page_ui_progress(page, episode_count)
 
             if page < self.end_page:
-                time.sleep(config.get(config.auto_parse_interval))
+                time.sleep(config.get("auto_parse_interval"))
 
     def parse_url_list(self, url_list: list):
         for url in url_list:

@@ -147,7 +147,7 @@ class AudioInfoParser:
             return self.audio_quality_info_map.get(audio_quality_id, {})
 
     def get_audio_info_by_priority(self):
-        for quality_id in config.get(config.audio_quality_priority):
+        for quality_id in config.get("audio_quality_priority"):
             if quality_id in self.audio_quality_info_map.keys():
                 return self.audio_quality_info_map.get(quality_id, {})
 

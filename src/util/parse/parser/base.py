@@ -45,7 +45,7 @@ class ParserBase:
         def getMixinKey(orig: str):
             return reduce(lambda s, i: s + orig[i], mixinKeyEncTab, "")[:32]
                 
-        mixin_key = getMixinKey(config.get(config.img_key) + config.get(config.sub_key))
+        mixin_key = getMixinKey(config.get("img_key") + config.get("sub_key"))
         curr_time = round(time.time())
 
         params["wts"] = curr_time
@@ -89,7 +89,7 @@ class ParserBase:
         return self.get_parser_type().value
     
     def check_login(self):
-        if not config.get(config.is_login) or config.is_expired:
+        if not config.get("is_login") or config.is_expired:
             signal_bus.toast.show_long_message.emit(
                 ToastNotificationCategory.ERROR,
                 Translator.ERROR_MESSAGES("LOGIN_REQUIRED"),

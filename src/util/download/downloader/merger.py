@@ -39,7 +39,7 @@ class Merger(object):
             self.merge_video_parts()
 
         elif self.task_info.File.audio_file_ext == "m4a":
-            if config.get(config.m4a_to_mp3):
+            if config.get("m4a_to_mp3"):
                 # 将 m4a 转换为 mp3
                 self.m4a_to_mp3()
                 return
@@ -295,7 +295,7 @@ class Merger(object):
             )
 
     def check_attach_cover(self):
-        if config.get(config.attach_cover):
+        if config.get("attach_cover"):
             cover_path = Path(self.get_cwd(), self.cover_file_name)
             if cover_path.exists():
                 return self.cover_file_name
@@ -371,7 +371,7 @@ class Merger(object):
     def temp_cover_file_name(self):
         return "cover_{task_id}.{file_ext}".format(
             task_id = self.task_info.Basic.task_id,
-            file_ext = config.get(config.cover_type).value
+            file_ext = config.get("cover_type")
         )
 
     @property
@@ -392,4 +392,4 @@ class Merger(object):
 
     @property
     def cover_file_name(self):
-        return f"{self.task_info.File.name}.{config.get(config.cover_type).value}"
+        return f"{self.task_info.File.name}.{config.get("cover_type")}"

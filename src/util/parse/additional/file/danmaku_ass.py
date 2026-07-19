@@ -171,7 +171,7 @@ class DanmakuLayoutEngine:
         self.bottom_tracks = [StaticTrack() for _ in range(self.max_static_rows)]
 
     def _load_config(self):
-        style = config.get(config.danmaku_style)
+        style = config.get("danmaku_style")
 
         # 用 PIL ImageFont 加载字体(替代原 GUI 字体加载)
         self._font = _load_pil_font(
@@ -252,7 +252,7 @@ class DanmakuASS:
         )
 
     def _get_style_info(self) -> Tuple[str, int, int]:
-        style = config.get(config.danmaku_style)
+        style = config.get("danmaku_style")
 
         screen_width = style["resolution"]["width"]
         screen_height = style["resolution"]["height"]

@@ -21,7 +21,7 @@ class DanmakuParser(AdditionalParserBase):
     def parse(self):
         dict_list = self._get_all_protobuf_parts()
 
-        match config.get(config.danmaku_type):
+        match config.get("danmaku_type"):
             case DanmakuType.XML:
                 contents, suffix = self._to_xml(dict_list)
 

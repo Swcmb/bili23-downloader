@@ -318,8 +318,8 @@ class Downloader(object):
         # max_thread_count 由 GlobalThreadPoolTask 内部统一管理
 
         # 实例化令牌桶（0 为不限速，单位：字节/秒）。此处从已有配置文件中取值或直接扩展
-        if config.get(config.speed_limit_enabled):
-            rate = config.get(config.speed_limit_rate) * 1024 * 1024
+        if config.get("speed_limit_enabled"):
+            rate = config.get("speed_limit_rate") * 1024 * 1024
         else:
             rate = 0
 
@@ -638,13 +638,13 @@ class Downloader(object):
         # 延迟导入:network.request 当前(T2.2 阶段)仍依赖 PySide6
         from ...network.request import get_cookies, get_mounts
 
-        limits = httpx.Limits(max_keepalive_connections = config.get(config.download_thread), max_connections = config.get(config.download_thread))
+        limits = httpx.Limits(max_keepalive_connections = config.get("download_thread"), max_connections = config.get("download_thread"))
         transport = httpx.HTTPTransport(retries = 5)
         mounts = get_mounts(Proxy().get_proxies())
 
         headers = {
             "Referer": self.task_info.Episode.url,
-            "User-Agent": config.get(config.user_agent)
+            "User-Agent": config.get("user_agent")
         }
 
         self.session = httpx.Client(
@@ -756,7 +756,7 @@ class Downloader(object):
             
         if not path.exists() and file_size > 0:
             # 预分配文件空间
-            if config.get(config.preallocate_file_space):
+            if config.get("preallocate_file_space"):
                 File.preallocate_file(path, file_size)
 
             else:

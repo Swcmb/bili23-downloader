@@ -88,7 +88,7 @@ class TaskManager:
 
         # FileNameInfo
         # 下载目录在生成 TaskInfo 时就确定，后续即便修改了下载目录的设置，也不会影响已生成的 TaskInfo 中的下载目录，避免下载过程中下载目录发生变化导致的问题
-        task_info.File.download_path = config.get(config.download_path)
+        task_info.File.download_path = config.get("download_path")
 
         self.__update_file_name_info(task_info)
 
@@ -99,10 +99,10 @@ class TaskManager:
         attr_dict = {
             DownloadType.VIDEO: config.download_video_stream,
             DownloadType.AUDIO: config.download_audio_stream,
-            DownloadType.DANMAKU: config.get(config.download_danmaku),
-            DownloadType.SUBTITLE: config.get(config.download_subtitle),
-            DownloadType.COVER: config.get(config.download_cover),
-            DownloadType.METADATA: config.get(config.download_metadata)
+            DownloadType.DANMAKU: config.get("download_danmaku"),
+            DownloadType.SUBTITLE: config.get("download_subtitle"),
+            DownloadType.COVER: config.get("download_cover"),
+            DownloadType.METADATA: config.get("download_metadata")
         }
 
         type = 0
@@ -182,7 +182,7 @@ class TaskManager:
                 episode_info[title] = re.sub(r'[\/\\\:\*\?\"\<\>\|]', '_', episode_info.get(title, ""))
 
     def __get_number(self, episode_info: dict = None):
-        match config.get(config.numbering_type):
+        match config.get("numbering_type"):
             case NumberingType.CONTINUOUS:
                 # 全局顺序编号
                 return config.global_starting_number
@@ -372,7 +372,7 @@ class TaskManager:
 
         if result:
             # 触发重复下载，根据用户设置执行相应的操作
-            match config.get(config.duplicate_download_resolution):
+            match config.get("duplicate_download_resolution"):
                 case DuplicateDownloadResolution.CONTINUE:
                     # 返回 False 表示继续下载
                     logger.info("已继续重复下载任务: %s", episode_info.get("title", ""))

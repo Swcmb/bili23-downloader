@@ -41,7 +41,7 @@ def __resolve_conflict(original_path: Path, new_path: Path) -> Path:
     if not new_path.exists():
         return new_path
 
-    match config.get(config.file_conflict_resolution):
+    match config.get("file_conflict_resolution"):
         case FileConflictResolution.OVERWRITE:
             new_path.unlink()
             return new_path

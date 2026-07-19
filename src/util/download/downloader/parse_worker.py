@@ -218,7 +218,7 @@ class ParseWorker(ParserBase):
             self.task_info.Download.keep_original_files = False
 
         if self.task_info.Download.merge_video_audio or self.task_info.Download.video_parts_count > 0:
-            self.task_info.File.merge_file_ext = config.get(config.video_container).value
+            self.task_info.File.merge_file_ext = config.get("video_container")
 
     def filter_download_list(self, download_list: dict):
         # 根据 task_info 中已有的 queue 过滤下载列表，去掉不需要下载的条目

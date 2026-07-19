@@ -147,12 +147,12 @@ class VideoInfoParser:
         return self.video_info_map[video_quality_id][video_codec_id]
 
     def get_video_quality_id_by_priority(self):
-        for quality_id in config.get(config.video_quality_priority):
+        for quality_id in config.get("video_quality_priority"):
             if quality_id in self.video_info_map.keys():
                 return quality_id
             
     def get_video_codec_id_by_priority(self, video_quality_id: int):
-        for codec_id in config.get(config.video_codec_priority):
+        for codec_id in config.get("video_codec_priority"):
             if codec_id in self.video_info_map[video_quality_id].keys():
                 return codec_id
 
