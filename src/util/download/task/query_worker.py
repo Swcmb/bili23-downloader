@@ -1,6 +1,5 @@
-from PySide6.QtCore import QObject, Signal, Slot
-
 from ...common.enum import DownloadStatus
+from ...thread.worker_base import WorkerBase
 
 from .manager import task_manager
 from .info import TaskInfo
@@ -10,15 +9,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class QueryWorker(QObject):
-    success = Signal(list, list)
-    error = Signal(str)
-    finished = Signal()
+class QueryWorker(WorkerBase):
+    """任务查询 Worker(继承 WorkerBase,纯 Python 实现)
+
+    success/error/finished 信号由 WorkerBase 提供,无需装饰器。
+    """
 
     def __init__(self):
         super().__init__()
 
-    @Slot()
     def run(self):
         try:
             self.query()

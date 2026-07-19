@@ -1,4 +1,4 @@
-from PySide6.QtCore import QRunnable
+from ...thread.worker_base import WorkerBase
 
 from ...parse.episode.bangumi import BangumiEpisodeParser
 from ...parse.episode.tree import EpisodeData, Attribute
@@ -11,16 +11,22 @@ from ...common.enum import ToastNotificationCategory
 from ...common.signal_bus import signal_bus
 from ...common.translator import Translator
 
-from ...network.request import SyncNetWorkRequest
-
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class ReparseWorker(QRunnable, ParserBase):
+class ReparseWorker(WorkerBase, ParserBase):
+    """重新解析 Worker(继承 WorkerBase 与 ParserBase,纯 Python 实现)
+
+    WorkerBase 提供 success/error/finished 信号;ParserBase 提供解析
+    相关基础设施(enc_wbi、check_response 等)。
+    """
+
     def __init__(self, episode_info: dict, show_toast: bool = False):
-        super().__init__()
+        # 显式调用两个父类的初始化,确保信号与解析字段都被正确设置
+        WorkerBase.__init__(self)
+        ParserBase.__init__(self)
 
         self.info_data: dict = None
         self.episode_info: dict = episode_info
@@ -95,6 +101,8 @@ class ReparseWorker(QRunnable, ParserBase):
 
         url = f"https://api.bilibili.com/x/web-interface/wbi/view?{self.enc_wbi(params)}"
 
+        # 延迟导入:network.request 顶部含 GUI 框架依赖,需避免传递依赖
+        from ...network.request import SyncNetWorkRequest
         request = SyncNetWorkRequest(url)
         response = request.run()
 
@@ -105,6 +113,8 @@ class ReparseWorker(QRunnable, ParserBase):
     def get_bangumi_info(self, ep_id: str):
         url = f"https://api.bilibili.com/pgc/view/web/season?ep_id={ep_id}"
 
+        # 延迟导入:network.request 顶部含 GUI 框架依赖,需避免传递依赖
+        from ...network.request import SyncNetWorkRequest
         request = SyncNetWorkRequest(url)
         response = request.run()
 
@@ -115,6 +125,8 @@ class ReparseWorker(QRunnable, ParserBase):
     def get_cheese_info(self, season_id: int):
         url = f"https://api.bilibili.com/pugv/view/web/season/v2?season_id={season_id}"
 
+        # 延迟导入:network.request 顶部含 GUI 框架依赖,需避免传递依赖
+        from ...network.request import SyncNetWorkRequest
         request = SyncNetWorkRequest(url)
         response = request.run()
 
