@@ -1,0 +1,105 @@
+name: CI
+
+# 触发条件:push 到主分支或针对主分支的 PR
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# 取消同一分支上未完成的旧运行,节省 CI 资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 跨平台 × 跨 Python 版本测试矩阵
+  test:
+    name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pytest-cov
+
+      - name: Run tests with coverage
+        run: pytest tests/ --cov=src/util --cov=src/cli --cov-report=xml --cov-report=term
+
+      # 仅在 Ubuntu + Python 3.11 上传一次覆盖率,避免重复上传
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  # 覆盖率门禁:各模块独立校验,确保重构后质量不回退
+  coverage-gate:
+    name: Coverage Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pytest-cov
+
+      # 各模块独立门禁,任一不达标即失败
+      - name: Coverage gate - util/common >= 90%
+        run: pytest tests/ --cov=src/util/common --cov-fail-under=90
+
+      - name: Coverage gate - util/parse >= 80%
+        run: pytest tests/ --cov=src/util/parse --cov-fail-under=80
+
+      - name: Coverage gate - util/download >= 75%
+        run: pytest tests/ --cov=src/util/download --cov-fail-under=75
+
+      - name: Coverage gate - cli >= 70%
+        run: pytest tests/ --cov=src/cli --cov-fail-under=70
+
+  # 代码静态检查
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run ruff check
+        run: ruff check src/ tests/
