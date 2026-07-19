@@ -1,7 +1,6 @@
 from ..common.enum import ToastNotificationCategory
 from ..common.signal_bus import signal_bus
 from ..common.config import config
-from ..network.request import client
 
 import logging
 
@@ -15,7 +14,7 @@ class AuthBase:
         logger.error(message)
 
         signal_bus.emit_signal(self.error, message)
-    
+
     def show_toast_error(self, title: str, message: str):
         logger.error("%s: %s", title, message)
 
@@ -30,9 +29,12 @@ class AuthBase:
             signal_bus.emit_signal(self.error, message)
 
             raise RuntimeError(message)
-    
+
     def update_cookies(self):
         # 登录成功后更新 cookies 信息到配置中
+        # 延迟导入:network.request 顶部含 Qt 依赖,避免传递触发 PySide6 加载
+        from ..network.request import client
+
         config.set(config.bili_jct, client.cookies.get("bili_jct", ""))
         config.set(config.DedeUserID, client.cookies.get("DedeUserID", ""))
         config.set(config.DedeUserID__ckMd5, client.cookies.get("DedeUserID__ckMd5", ""))
