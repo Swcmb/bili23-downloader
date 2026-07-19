@@ -1,5 +1,5 @@
 from ...common._json import json_loads, json_dumps
-from ...common.config import appdata_path, config
+from ...common.io.directory import directory
 from ...common.timestamp import get_timestamp
 from ...common.database import Database
 from ...parse.episode.tree import Attribute
@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 class TaskDatabase(Database):
     def __init__(self):
-        self.path = Path(appdata_path) / "Bili23 Downloader" / "task.db"
+        # 原 appdata_path 已随 T1 platformdirs 改造移除,
+        # 改用 directory.data_dir(已为应用专属目录)
+        self.path = Path(directory.data_dir) / "task.db"
 
         self.check_and_create_table()
 

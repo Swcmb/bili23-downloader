@@ -1,8 +1,20 @@
-from PySide6.QtCore import Qt
-
-from enum import IntFlag
+from enum import IntEnum, IntFlag
 from typing import List
 import uuid
+
+
+class CheckState(IntEnum):
+    """勾选状态枚举,替代 PySide6.QtCore.Qt.CheckState
+
+    与 Qt.CheckState 数值保持一致:
+      Unchecked        = 0
+      PartiallyChecked = 1
+      Checked          = 2
+    """
+    Unchecked = 0
+    PartiallyChecked = 1
+    Checked = 2
+
 
 class EpisodeData:
     # 全局剧集数据表
@@ -15,7 +27,7 @@ class EpisodeData:
         cls.table[episode_id] = {}
 
         return episode_id
-    
+
     @classmethod
     def get_episode_data(cls, episode_id: str):
         return cls.table.get(episode_id, {})
@@ -52,7 +64,7 @@ class Attribute(IntFlag):
 class TreeItemBase:
     def __init__(self):
         self.parent: TreeItem = None
-        self.checked = Qt.CheckState.Unchecked
+        self.checked = CheckState.Unchecked
         self.children: List[TreeItem] = []
 
     def add_child(self, child: "TreeItem"):
@@ -62,19 +74,20 @@ class TreeItemBase:
 
     def child(self, row: int):
         return self.children[row]
-    
+
     def count(self):
         return len(self.children)
-    
+
     def row(self):
         if self.parent:
             return self.parent.children.index(self)
-        
+
         return 0
-    
-    def set_checked_state(self, state: Qt.CheckState):
-        if isinstance(state, int):
-            state = Qt.CheckState(state)
+
+    def set_checked_state(self, state):
+        # 接受 CheckState 或 int,统一转换为 CheckState
+        if isinstance(state, int) and not isinstance(state, CheckState):
+            state = CheckState(state)
 
         if self.checked == state:
             return
@@ -82,14 +95,14 @@ class TreeItemBase:
         self.checked = state
 
         # 向下传递
-        if state in (Qt.CheckState.Checked, Qt.CheckState.Unchecked):
+        if state in (CheckState.Checked, CheckState.Unchecked):
             self._propagate_down(state)
 
         # 向上传递
         if self.parent:
             self.parent._propagate_up()
 
-    def _propagate_down(self, state: Qt.CheckState):
+    def _propagate_down(self, state):
         self.checked = state
 
         for child in self.children:
@@ -97,15 +110,15 @@ class TreeItemBase:
 
     def _propagate_up(self):
         states = [child.checked for child in self.children]
-        
-        if all(s == Qt.CheckState.Checked for s in states):
-            new_state = Qt.CheckState.Checked
 
-        elif all(s == Qt.CheckState.Unchecked for s in states):
-            new_state = Qt.CheckState.Unchecked
+        if all(s == CheckState.Checked for s in states):
+            new_state = CheckState.Checked
+
+        elif all(s == CheckState.Unchecked for s in states):
+            new_state = CheckState.Unchecked
 
         else:
-            new_state = Qt.CheckState.PartiallyChecked
+            new_state = CheckState.PartiallyChecked
 
         if self.checked != new_state:
             self.checked = new_state
@@ -120,7 +133,7 @@ class TreeItemBase:
             if child.children:
                 checked_items.extend(child.get_all_checked_children(to_dict = to_dict, mark_as_downloaded = mark_as_downloaded))
             else:
-                if child.checked == Qt.CheckState.Checked and child.attribute & Attribute.TREE_NODE_BIT == 0:  # 排除树节点
+                if child.checked == CheckState.Checked and child.attribute & Attribute.TREE_NODE_BIT == 0:  # 排除树节点
 
                     if mark_as_downloaded:
                         child.downloaded = True

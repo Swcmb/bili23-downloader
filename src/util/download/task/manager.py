@@ -11,8 +11,8 @@ from ...parse.episode.tree import EpisodeData, Attribute
 from ...format.file_name import FileNameFormatter
 from ...thread.pool import GlobalThreadPoolTask
 
-from ..cover.manager import cover_manager
-from .reparse_worker import ReparseWorker
+# cover.manager 与 reparse_worker 当前(T2.5/T2.6 阶段)仍依赖 PySide6,
+# 改为延迟导入以避免 import 时触发 PySide6,具体见各调用点
 from .db import TaskDatabase
 from .info import TaskInfo
 
@@ -68,6 +68,8 @@ class TaskManager:
 
         # BasicInfo
         task_info.Basic.task_id = str(uuid4())
+        # 延迟导入:cover_manager 当前(T2.5 阶段)仍依赖 PySide6
+        from ..cover.manager import cover_manager
         task_info.Basic.cover_id = cover_manager.arrange_cover_id(episode_info.get("cover", ""))
         task_info.Basic.show_title = episode_info.get("title", "")
         task_info.Basic.created_time = get_timestamp_ms()
@@ -152,11 +154,13 @@ class TaskManager:
 
     def __check_reparse_needed(self, episode_info: dict, show_toast: bool = False):
         if episode_info.get("attribute", 0) & Attribute.NEED_PARSE_BIT:
+            # 延迟导入:ReparseWorker 当前(T2.6 阶段)仍依赖 PySide6
+            from .reparse_worker import ReparseWorker
             worker = ReparseWorker(episode_info, show_toast)
             GlobalThreadPoolTask.run(worker)
 
             return True
-        
+
         return False
 
     def __filter_illegal_characters(self, episode_info: dict):

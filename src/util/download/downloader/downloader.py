@@ -1,6 +1,3 @@
-from PySide6.QtCore import QRunnable, QThreadPool, QObject, QTimer, Slot, QMetaObject, Q_ARG
-from PySide6.QtCore import Qt
-
 from ...common.enum import DownloadStatus, DownloadType, MediaType, ToastNotificationCategory
 from ...common.data import reversed_video_quality_map
 from ...common.io.directory import Directory
@@ -12,17 +9,16 @@ from ...common.io.file import File
 
 from ...parse.additional.worker import AdditionalParseWorker
 from ...thread.pool import GlobalThreadPoolTask
-from ...network.request import get_cookies, get_mounts
+# network.request / parse_worker / merger 当前(T2.2 阶段)仍依赖 PySide6,
+# 改为延迟导入以避免 import 时触发 PySide6,具体见各调用点
 from ...network.proxy import Proxy
 from ...thread.async_ import AsyncTask
+from ...thread.worker_base import WorkerBase
 
 from ..task.manager import task_manager
 from ..task.info import TaskInfo
 
-from .parse_worker import ParseWorker
-from .merger import Merger
-
-from threading import Event, Lock
+from threading import Event, Lock, Timer
 from pathlib import Path
 import logging
 import errno
@@ -30,6 +26,59 @@ import httpx
 import time
 
 logger = logging.getLogger(__name__)
+
+
+class _PeriodicTimer:
+    """周期性定时器,基于 threading.Timer 链式调度,替代 PySide6.QTimer
+
+    设计要点:
+    - 后台 daemon 线程触发回调,避免阻塞调用线程
+    - 通过 _stopped 标志停止,Timer.cancel 仅取消未触发的调度
+    - 回调异常被吞掉,避免终止定时器线程
+    """
+
+    def __init__(self, interval_ms: int, callback):
+        self._interval = interval_ms / 1000.0
+        self._callback = callback
+        self._timer: Timer = None
+        self._stopped = True
+
+    def start(self) -> None:
+        """启动定时器(已在运行则忽略)"""
+        if not self._stopped:
+            return
+        self._stopped = False
+        self._schedule()
+
+    def stop(self) -> None:
+        """停止定时器"""
+        self._stopped = True
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    def isActive(self) -> bool:
+        """是否正在运行(兼容原 QTimer API)"""
+        return not self._stopped
+
+    def _schedule(self) -> None:
+        """调度下一次触发"""
+        if self._stopped:
+            return
+        self._timer = Timer(self._interval, self._tick)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _tick(self) -> None:
+        """单次触发回调,然后调度下一次"""
+        if self._stopped:
+            return
+        try:
+            self._callback()
+        except Exception:
+            # 回调异常不影响下一次调度
+            logger.exception("PeriodicTimer 回调异常")
+        self._schedule()
 
 class TokenBucket:
     """线程安全的令牌桶，用于平滑限制下载速度"""
@@ -75,7 +124,7 @@ class TokenBucket:
             self.tokens = rate
             self.last_update = time.monotonic()
 
-class ChunkWorker(QRunnable):
+class ChunkWorker(WorkerBase):
     max_retries = 5
     retryable_status_codes = {408, 429, 500, 502, 503, 504}
     permanent_status_codes = {400, 401, 403, 404, 405, 410, 416}
@@ -103,7 +152,8 @@ class ChunkWorker(QRunnable):
     }
 
     def __init__(self, session: httpx.Client, file_key: str, chunk_index: int, chunk_range: tuple[int, int], file_path: Path, url: str, referer: str, task_info: TaskInfo, stop_event: Event, lock: Lock, token_bucket: TokenBucket, generation: int, parent=None, on_chunk_start=None, on_chunk_end=None):
-        super().__init__()
+        # 显式调用 WorkerBase.__init__ 初始化 success/error/finished 信号
+        WorkerBase.__init__(self)
         self.session = session
         self.file_key = file_key
         self.chunk_index = chunk_index
@@ -122,15 +172,11 @@ class ChunkWorker(QRunnable):
         self.on_chunk_end = on_chunk_end
 
     def _invoke_download_error(self, message: str):
+        # 原 QMetaObject.invokeMethod 跨线程投递,改造为直接调用
+        # on_download_error 内部已用锁保护共享状态,线程安全
         if self.parent:
             logger.error(message)
-
-            QMetaObject.invokeMethod(
-                self.parent,
-                "on_download_error",
-                Qt.ConnectionType.QueuedConnection,
-                Q_ARG(str, message)
-            )
+            self.parent.on_download_error(message)
 
     def _is_retryable_exception(self, exc: Exception):
         if isinstance(exc, StopIteration):
@@ -236,12 +282,9 @@ class ChunkWorker(QRunnable):
                     
                 # 检查区块是否真下载到了服务端承诺的大小（原为严格检测 self.chunk_size）
                 if downloaded >= expected_size:
-                    QMetaObject.invokeMethod(
-                        self.parent, "on_chunk_finished",
-                        Qt.ConnectionType.QueuedConnection,
-                        Q_ARG(str, self.file_key),
-                        Q_ARG(int, self.chunk_index)
-                    )
+                    # 原 QMetaObject.invokeMethod 跨线程投递,改造为直接调用
+                    # on_chunk_finished 内部已用 update_lock 保护共享状态
+                    self.parent.on_chunk_finished(self.file_key, self.chunk_index)
                     break
                 else:
                     # 提前结束但没有报错，说明连接意外断开，触发重试
@@ -267,20 +310,19 @@ class ChunkWorker(QRunnable):
         if self.on_chunk_end:
             self.on_chunk_end()
 
-class Downloader(QObject):
+class Downloader(object):
     def __init__(self, task_info: TaskInfo):
-        super().__init__()
         self.task_info = task_info
         self.init_session()
-        self.thread_pool = QThreadPool()
-        self.thread_pool.setMaxThreadCount(config.get(config.download_thread))
+        # 原 QThreadPool 改为全局线程池(GlobalThreadPoolTask),
+        # max_thread_count 由 GlobalThreadPoolTask 内部统一管理
 
         # 实例化令牌桶（0 为不限速，单位：字节/秒）。此处从已有配置文件中取值或直接扩展
         if config.get(config.speed_limit_enabled):
             rate = config.get(config.speed_limit_rate) * 1024 * 1024
         else:
             rate = 0
-        
+
         self.token_bucket = TokenBucket(rate = rate)
 
         self.chunk_size = 4 * 1024 * 1024
@@ -297,13 +339,12 @@ class Downloader(QObject):
         self.start_worker_lock = Lock()
         self.start_worker_pending = False
         self.download_generation = 0
-        
+
         self._completion_triggered = False
         self._download_error_triggered = False
 
-        self.speed_timer = QTimer()
-        self.speed_timer.setInterval(1000)
-        self.speed_timer.timeout.connect(self._calculate_speed)
+        # 原 QTimer 改为 _PeriodicTimer(基于 threading.Timer)
+        self.speed_timer = _PeriodicTimer(1000, self._calculate_speed)
 
     def start(self):
         self._completion_triggered = False
@@ -320,18 +361,20 @@ class Downloader(QObject):
                 self.task_info.Download.status = DownloadStatus.PARSING
                 self._stop_event.clear()
 
+                # 延迟导入:parse_worker 当前(T2.2 阶段)仍依赖 PySide6
+                from .parse_worker import ParseWorker
+
                 parse_worker = ParseWorker(self.task_info, self)
-                GlobalThreadPoolTask.run(parse_worker)
+                GlobalThreadPoolTask.run(parse_worker.run)
             else:
                 self.task_info.Download.info_label = Translator.TIP_MESSAGES("ADDITIONAL_FILES")
                 self.update_item(self.task_info)
                 self.on_download_completed()
 
-    @Slot(str)
     def on_parse_finished(self, download_info_json: str):
         if self._stop_event.is_set():
             return
-        
+
         download_info = json_loads(download_info_json)
         self.download_list = download_info["download_list"]
         self.task_info.Download.status = DownloadStatus.DOWNLOADING
@@ -346,7 +389,6 @@ class Downloader(QObject):
 
         self.start_download()
 
-    @Slot(str)
     def on_parse_error(self, error_message: str):
         self.task_info.Download.status = DownloadStatus.FAILED
 
@@ -360,7 +402,6 @@ class Downloader(QObject):
             error_message
         )
 
-    @Slot(str)
     def on_download_error(self, error_message: str):
         if self._download_error_triggered:
             return
@@ -374,7 +415,7 @@ class Downloader(QObject):
 
         signal_bus.download.auto_manage_concurrent_downloads.emit()
 
-        # 
+        #
         signal_bus.toast.show_long_message.emit(
             ToastNotificationCategory.ERROR,
             Translator.ERROR_MESSAGES("DOWNLOAD_FAILED"),
@@ -409,12 +450,9 @@ class Downloader(QObject):
 
             self.start_worker(generation)
         except Exception as e:
-            QMetaObject.invokeMethod(
-                self,
-                "on_download_error",
-                Qt.ConnectionType.QueuedConnection,
-                Q_ARG(str, str(e))
-            )
+            # 原 QMetaObject.invokeMethod 跨线程投递,改造为直接调用
+            # on_download_error 内部已用锁/标志位保护,线程安全
+            self.on_download_error(str(e))
         finally:
             with self.start_worker_lock:
                 self.start_worker_pending = False
@@ -474,12 +512,16 @@ class Downloader(QObject):
                 on_chunk_start = self.on_chunk_start,
                 on_chunk_end = self.on_chunk_end
             )
-            self.thread_pool.start(worker)
+            # 原 self.thread_pool.start(worker) 改为提交到全局线程池
+            GlobalThreadPoolTask.run(worker.run)
 
         task_manager.update_async(self.task_info)
 
     def start_merge(self):
         self.task_info.Download.status = DownloadStatus.MERGING
+        # 延迟导入:merger 当前(T2.2 阶段)仍依赖 PySide6
+        from .merger import Merger
+
         merge_worker = Merger(self.task_info, parent=self)
         merge_worker.start()
 
@@ -539,7 +581,6 @@ class Downloader(QObject):
         with self.update_lock:
             self.task_info.Download.downloaded_size = downloaded_size
     
-    @Slot(str, int)
     def on_chunk_finished(self, file_key: str, chunk_index: int):
         with self.update_lock:
             file_info = self.task_info.Download.files.get(file_key, {})
@@ -594,6 +635,9 @@ class Downloader(QObject):
             task_manager._update_media_info(self.task_info)
 
     def init_session(self):
+        # 延迟导入:network.request 当前(T2.2 阶段)仍依赖 PySide6
+        from ...network.request import get_cookies, get_mounts
+
         limits = httpx.Limits(max_keepalive_connections = config.get(config.download_thread), max_connections = config.get(config.download_thread))
         transport = httpx.HTTPTransport(retries = 5)
         mounts = get_mounts(Proxy().get_proxies())
@@ -633,11 +677,12 @@ class Downloader(QObject):
 
         if any([danmaku, subtitles, cover, metadata]):
             self.task_info.Download.status = DownloadStatus.ADDITIONAL_PROCESSING
-            
+
             worker = AdditionalParseWorker(self.task_info)
             worker.success.connect(self.wait_merge)
             worker.error.connect(self.on_parse_error)
-            AsyncTask.run(worker)
+            # 原 AsyncTask.run(worker) 已废弃,新 API: AsyncTask(func).start()
+            AsyncTask(worker.run).start()
         else:
             self.wait_merge()
 
@@ -695,10 +740,9 @@ class Downloader(QObject):
 
     def on_delete(self):
         self.session = None
-        self.thread_pool = None
         self.task_info = None
         self.download_list = None
-        self.deleteLater()
+        # 原 self.deleteLater() 已移除(QObject 专用)
     
     def update_item(self, task_info: TaskInfo):
         signal_bus.download.update_downloading_item.emit(task_info)
