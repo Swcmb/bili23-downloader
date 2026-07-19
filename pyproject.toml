@@ -1,20 +1,118 @@
+# =============================================================================
+# Bili23-Downloader CLI - 现代化 PEP 621 项目配置
+# 由原 PySide6 GUI 应用改造为 Typer + Rich CLI 工具
+# =============================================================================
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# -----------------------------------------------------------------------------
+# 项目元数据
+# -----------------------------------------------------------------------------
 [project]
 name = "bili23-downloader"
-version = "2.11.0"
-description = "开源、免费、跨平台的 B 站视频下载工具，支持多线程加速、音视频分离、弹幕元数据获取、自定义命名与分类等功能。Open Source, Free, Cross-Platform Bilibili Video Downloader."
+version = "3.0.0"
+description = "开源、免费、跨平台的 B 站视频命令行下载工具"
 readme = "README.md"
-license = "GPL-3.0"
+license = { text = "GPL-3.0" }
 requires-python = ">=3.9"
-dependencies = [
-    "PySide6==6.10.3",
-    "PySide6-Fluent-Widgets==1.11.2",
-    "orjson==3.11.9",
-    "qrcode==8.2",
-    "protobuf==7.35.1",
-    "httpx==0.28.1",
-    "psutil==7.2.2",
-]
 authors = [
-    {name = "ScottSloan", email = "world1019@sina.com"},
+    { name = "Bili23-Downloader Contributors" },
 ]
-encoding = "utf-8"
+keywords = ["bilibili", "downloader", "cli", "video", "danmaku"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "platformdirs>=4.2",
+    "qrcode>=7.4",
+    "Pillow>=10.0",
+    "httpx>=0.27",
+]
+
+# -----------------------------------------------------------------------------
+# 可选依赖:开发工具链
+# -----------------------------------------------------------------------------
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "respx>=0.20",
+    "freezegun>=1.4",
+]
+
+# -----------------------------------------------------------------------------
+# 项目链接
+# -----------------------------------------------------------------------------
+[project.urls]
+Homepage = "https://github.com/YourName/Bili23-Downloader"
+Repository = "https://github.com/YourName/Bili23-Downloader"
+Issues = "https://github.com/YourName/Bili23-Downloader/issues"
+
+# -----------------------------------------------------------------------------
+# CLI 入口:安装后可通过 `bili23` 命令直接调用
+# -----------------------------------------------------------------------------
+[project.scripts]
+bili23 = "src.main:app"
+
+# -----------------------------------------------------------------------------
+# setuptools 包发现与资源打包配置
+# -----------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+# 确保 i18n 翻译资源(.ts)被打包到发布产物中
+[tool.setuptools.package-data]
+"src.res.i18n" = ["*.ts"]
+
+# -----------------------------------------------------------------------------
+# pytest 配置
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: marks tests as integration tests",
+    "slow: marks tests as slow",
+]
+
+# -----------------------------------------------------------------------------
+# coverage 配置:仅覆盖核心业务模块(util / cli)
+# -----------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src/util", "src/cli"]
+omit = [
+    "src/res/*",
+    "*/__pycache__/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
