@@ -6,6 +6,7 @@
 """
 import os
 import logging
+from pathlib import Path
 
 try:
     from platformdirs import user_config_dir, user_data_dir
@@ -41,6 +42,17 @@ class Directory:
         # 确保目录存在(文件路径的父目录也一并创建)
         for d in (self.config_dir, self.data_dir, self.log_dir):
             os.makedirs(d, exist_ok=True)
+
+    @staticmethod
+    def get_cwd() -> Path:
+        """获取应用工作目录(用于定位附带 FFmpeg 等资源)
+
+        优先使用 PYSTAND_HOME 环境变量(PyStand 打包场景),
+        否则回退到当前工作目录。
+        """
+        if home := os.environ.get("PYSTAND_HOME"):
+            return Path(home)
+        return Path.cwd()
 
 
 # 模块级单例,保持与原代码 `from util.common.io.directory import directory` 兼容

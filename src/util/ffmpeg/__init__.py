@@ -51,31 +51,39 @@ def on_ffmpeg_not_found():
 
 cwd = Directory.get_cwd()
 
+# 运行时状态属性(原 config 类属性,改为实例动态属性)
 config.ffmpeg_executable = ffmpeg_executable
 bundle_ffmpeg_path = cwd / "bundle" / ffmpeg_executable
 config.bundle_ffmpeg_exist = bundle_ffmpeg_path.exists()
+config.no_ffmpeg_available = True
 
-match config.get(config.ffmpeg_source):
+# 读取 ffmpeg_source 配置(字符串值,需转换为 FFmpegSource 枚举)
+try:
+    ffmpeg_source = FFmpegSource(config.get("ffmpeg_source", "bundled"))
+except ValueError:
+    ffmpeg_source = FFmpegSource.BUNDLED
+
+match ffmpeg_source:
     case FFmpegSource.BUNDLED:
         if not try_bundled_ffmpeg():
             logger.warning("附带的 FFmpeg 不存在，将尝试使用环境变量中的 FFmpeg")
-            
+
             if try_system_ffmpeg():
-                config.set(config.ffmpeg_source, FFmpegSource.SYSTEM)
+                config.set("ffmpeg_source", FFmpegSource.SYSTEM.value)
             else:
                 on_ffmpeg_not_found()
-                
+
     case FFmpegSource.SYSTEM:
         if not try_system_ffmpeg():
             logger.warning("环境变量中无 FFmpeg，将尝试使用附带的 FFmpeg")
-            
+
             if try_bundled_ffmpeg():
-                config.set(config.ffmpeg_source, FFmpegSource.BUNDLED)
+                config.set("ffmpeg_source", FFmpegSource.BUNDLED.value)
             else:
                 on_ffmpeg_not_found()
-            
+
     case FFmpegSource.CUSTOM:
-        custom_ffmpeg_path = Path(config.get(config.custom_ffmpeg_path))
+        custom_ffmpeg_path = Path(config.get("custom_ffmpeg_path", ""))
 
         if custom_ffmpeg_path.exists():
             set_ffmpeg_environment(custom_ffmpeg_path)
@@ -83,10 +91,10 @@ match config.get(config.ffmpeg_source):
             logger.warning(f"自定义 FFmpeg 路径无效：{custom_ffmpeg_path}，将尝试 fallback")
 
             if try_bundled_ffmpeg():
-                config.set(config.ffmpeg_source, FFmpegSource.BUNDLED)
+                config.set("ffmpeg_source", FFmpegSource.BUNDLED.value)
 
             elif try_system_ffmpeg():
-                config.set(config.ffmpeg_source, FFmpegSource.SYSTEM)
-                
+                config.set("ffmpeg_source", FFmpegSource.SYSTEM.value)
+
             else:
                 on_ffmpeg_not_found()

@@ -66,6 +66,9 @@ _DEFAULT_VALUES: Dict[str, Any] = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
     ),
+    # FFmpeg 来源(bundled/system/custom,对应 FFmpegSource 枚举的 value)
+    "ffmpeg_source": "bundled",
+    "custom_ffmpeg_path": "",
 }
 
 

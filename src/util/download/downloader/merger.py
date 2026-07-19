@@ -1,5 +1,3 @@
-from PySide6.QtCore import QObject
-
 from ...common.enum import DownloadStatus, DownloadType, OriginalFileType, ToastNotificationCategory
 from ...common.io.file import safe_remove, safe_rename
 from ...common.timestamp import get_timestamp
@@ -18,10 +16,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class Merger(QObject):
-    def __init__(self, task_info: TaskInfo, parent = None):
-        super().__init__(parent)
+class Merger(object):
+    """音视频合并器,原 QObject 子类,改造为纯 Python 类
 
+    parent 参数保留以兼容原 API(Qt 对象父子关系已移除)。
+    """
+
+    def __init__(self, task_info: TaskInfo, parent = None):
         self.task_info = task_info
         self._has_error = False
         self._ffmpeg_runner = None
