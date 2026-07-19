@@ -17,6 +17,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# workflow 需要的权限:写 contents(创建 release)、写 packages(可选)
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   # 构建分发产物(sdist + wheel)
   build:
