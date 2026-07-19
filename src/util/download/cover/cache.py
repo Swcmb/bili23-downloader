@@ -1,7 +1,11 @@
-from PySide6.QtGui import QPixmap
+# src/util/download/cover/cache.py
+"""封面缓存 - 纯 Python 实现
 
+缓存值为原始图片字节流,供 GUI/CLI 共用。
+"""
 from typing import Dict
 
+
 class CoverCache:
-    cache: Dict[str, QPixmap] = {}
-    
+    # 缓存值类型为 bytes(原始图片字节流)
+    cache: Dict[str, bytes] = {}

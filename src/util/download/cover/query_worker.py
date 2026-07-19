@@ -1,21 +1,27 @@
-from PySide6.QtCore import QRunnable, Qt, QBuffer, QMetaObject, Q_ARG, QSize
-from PySide6.QtGui import QImage
-
-from ...network.request import SyncNetWorkRequest, ResponseType
+from ...thread.worker_base import WorkerBase
 
 from urllib.parse import urlencode
 import base64
 import httpx
+import logging
 
-class CoverQueryWorker(QRunnable):
-    def __init__(self, model, query_id: str, cover_id: str, cover_url: str, cover_size: QSize, query_param: dict = None):
+logger = logging.getLogger(__name__)
+
+
+class CoverQueryWorker(WorkerBase):
+    """封面查询 Worker(继承 WorkerBase,纯 Python 实现)
+
+    直接保留下载的原始字节流,不做裁剪/格式转换。
+    """
+    def __init__(self, model, query_id: str, cover_id: str, cover_url: str, cover_size = None, query_param: dict = None):
         super().__init__()
-    
+
         self.model = model
         self.query_id = query_id
         self.cover_id = cover_id
 
         self.cover_url = cover_url
+        # cover_size 保留以兼容原 API,CLI 版不再使用(无图片裁剪)
         self.cover_size = cover_size
 
         self.query_param = query_param
@@ -34,69 +40,55 @@ class CoverQueryWorker(QRunnable):
         result = cover_manager.query(self.cover_id)
 
         if result:
-            image = QImage()
-            image.loadFromData(base64.b64decode(result))
+            # 数据库中存的是 base64 字符串,解码为原始字节流
+            cover_data = base64.b64decode(result)
 
         else:
             for i in range(3):
                 try:
-                    image, base64_data = self.download_cover()
+                    cover_data, base64_data = self.download_cover()
                     break
                 except httpx.HTTPError:
                     if i == 2:
                         raise
             else:
                 return
-            
+
             cover_manager.create(self.cover_id, base64_data)
 
-        self.return_to_model(image)
+        self.return_to_model(cover_data)
 
-    def return_to_model(self, image: QImage):
-        QMetaObject.invokeMethod(
-            self.model,
-            "updateRowCover",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, self.query_id),
-            Q_ARG(QImage, image)
-        )
+    def return_to_model(self, cover_data: bytes):
+        """将封面字节流回传给 model(直接同步调用,无跨线程机制)
+
+        直接调用 model.updateRowCover(query_id, cover_data)。
+        """
+        self.model.updateRowCover(self.query_id, cover_data)
 
     def download_cover(self):
+        """下载封面图片,返回 (原始字节流, base64 字符串)"""
+        # 延迟导入:network.request 顶部含 GUI 框架依赖,需避免传递依赖
+        from ...network.request import SyncNetWorkRequest, ResponseType
+
         # 数据库中没有封面数据，下载封面图片
         request = SyncNetWorkRequest(self.cover_url, response_type = ResponseType.BYTES)
         response = request.run()
 
-        image = QImage()
-        image.loadFromData(response)
+        # 直接保留原始字节流,不再做图片裁剪/缩放
+        base64_data = base64.b64encode(response).decode("utf-8")
 
-        return self.process_cover(image)
-        
-    def process_cover(self, image: QImage):
-        # 裁剪成 16:9，并缩放到 144x81
-        width = self.cover_size.width()
-        height = self.cover_size.height()
-
-        image: QImage = image.scaled(width, height, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-
-        image = image.copy((image.width() - width) // 2, (image.height() - height) // 2, width, height)
-
-        # 导出为 webp 格式的 base64，最大化压缩率以节省数据库空间
-        buffer = QBuffer()
-        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
-        image.save(buffer, "WEBP")
-
-        base64_data = base64.b64encode(buffer.data()).decode("utf-8")
-
-        return image, base64_data
+        return response, base64_data
 
     def query_url(self):
         from ..cover.manager import cover_manager
 
         api_url = self.query_param.get("api_url")
         params = self.query_param.get("params")
-        
+
         url = f"{api_url}?{urlencode(params)}"
 
+        # 延迟导入:network.request 顶部含 GUI 框架依赖
+        from ...network.request import SyncNetWorkRequest
         request = SyncNetWorkRequest(url)
         response = request.run()
 

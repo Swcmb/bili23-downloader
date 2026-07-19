@@ -1,12 +1,13 @@
 from ...common.timestamp import get_timestamp
-from ...common.config import appdata_path
+from ...common.io.directory import directory
 from ...common.database import Database
 
 from pathlib import Path
 
 class CoverDatabase(Database):
     def __init__(self):
-        self.path = Path(appdata_path) / "Bili23 Downloader" / "thumbnail.db"
+        # 原 appdata_path 已移除,改用 platformdirs 的 data_dir
+        self.path = Path(directory.data_dir) / "thumbnail.db"
 
         self.check_and_create_table()
 
